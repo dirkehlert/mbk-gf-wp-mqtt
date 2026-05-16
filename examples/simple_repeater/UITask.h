@@ -37,6 +37,7 @@ class UITask {
   void renderBattery(uint16_t batt_mv, int x, int y);
   void updateRxActivityBins();
   void renderRxActivityChart();
+  void renderRxActivityHistogram();
   void syncObserverTotalsAfterReset();
 public:
   UITask(DisplayDriver& display) : _display(&display) {

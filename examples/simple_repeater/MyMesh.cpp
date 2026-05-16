@@ -562,6 +562,7 @@ void MyMesh::logRx(mesh::Packet *pkt, int len, float score) {
 }
 
 void MyMesh::observeClockSyncSample(const mesh::Identity& id, uint32_t timestamp) {
+#ifdef ENABLE_OBSERVER_CLOCK_SYNC
   if (observer_clock_sync_done) return;
   if (timestamp < CLOCK_SYNC_MIN_TIME || timestamp > CLOCK_SYNC_MAX_TIME) return;
 
@@ -604,6 +605,10 @@ void MyMesh::observeClockSyncSample(const mesh::Identity& id, uint32_t timestamp
     observer_clock_synced = true;
   }
   observer_clock_sync_done = true;
+#else
+  (void)id;
+  (void)timestamp;
+#endif
 }
 
 void MyMesh::logTx(mesh::Packet *pkt, int len) {
@@ -984,14 +989,18 @@ MyMesh::MyMesh(mesh::MainBoard &board, mesh::Radio &radio, mesh::MillisecondCloc
   observer_rx_packets = 0;
   observer_mqtt_published = 0;
   observer_path_next = 0;
+#ifdef ENABLE_OBSERVER_CLOCK_SYNC
   observer_clock_sync_next = 0;
   observer_clock_sync_count = 0;
   observer_clock_synced = false;
   observer_clock_sync_done = false;
   observer_clock_synced_at = 0;
+#endif
   memset(observer_paths, 0, sizeof(observer_paths));
   memset(observer_last_hops, 0, sizeof(observer_last_hops));
+#ifdef ENABLE_OBSERVER_CLOCK_SYNC
   memset(observer_clock_sync_samples, 0, sizeof(observer_clock_sync_samples));
+#endif
   _logging = false;
   region_load_active = false;
 
@@ -1198,9 +1207,13 @@ void MyMesh::setObserverMqttEnabled(bool enabled) {
 }
 
 bool MyMesh::toggleObserverMqttEnabled() {
+#ifdef WITH_MQTT_OBSERVER
   bool enabled = !_prefs.mqtt_enabled;
   setObserverMqttEnabled(enabled);
   return enabled;
+#else
+  return false;
+#endif
 }
 
 void MyMesh::rememberObserverPath(const mesh::Packet* packet) {
@@ -1296,10 +1309,6 @@ static void formatAge(char* dest, size_t dest_size, unsigned long age_secs) {
       snprintf(dest, dest_size, "%lum", age_mins);
     }
   }
-}
-
-static void formatSavepointFilename(char* dest, size_t dest_size, uint16_t id) {
-  snprintf(dest, dest_size, "/sp%04u.csv", (unsigned int)id);
 }
 
 static bool readLine(File& file, char* dest, size_t dest_size) {
@@ -1503,6 +1512,11 @@ void MyMesh::getObserverDiagLine(char* dest, size_t dest_size) const {
 #endif
 }
 
+#ifdef ENABLE_OBSERVER_SAVEPOINTS
+static void formatSavepointFilename(char* dest, size_t dest_size, uint16_t id) {
+  snprintf(dest, dest_size, "/sp%04u.csv", (unsigned int)id);
+}
+
 bool MyMesh::getObserverSavepointLine(uint8_t index, char* dest, size_t dest_size) const {
   if (!dest || dest_size == 0 || !_fs) return false;
   dest[0] = 0;
@@ -1535,12 +1549,14 @@ bool MyMesh::getObserverSavepointLine(uint8_t index, char* dest, size_t dest_siz
   file.close();
   return false;
 }
+#endif
 
 void MyMesh::getObserverClockSyncStatus(char* dest, size_t dest_size) const {
   if (!dest || dest_size == 0) return;
   uint32_t current = getRTCClock()->getCurrentTime();
   DateTime now_dt(current);
 
+#ifdef ENABLE_OBSERVER_CLOCK_SYNC
   if (observer_clock_synced) {
     DateTime dt(observer_clock_synced_at);
     snprintf(dest, dest_size, "CLK %02d:%02d UTC mesh %02d:%02d",
@@ -1574,8 +1590,12 @@ void MyMesh::getObserverClockSyncStatus(char* dest, size_t dest_size) const {
            (unsigned int)OBSERVER_CLOCK_SYNC_REQUIRED,
            (unsigned int)distinct,
            (unsigned int)OBSERVER_CLOCK_SYNC_DISTINCT);
+#else
+  snprintf(dest, dest_size, "CLK %02d:%02d UTC no sync", now_dt.hour(), now_dt.minute());
+#endif
 }
 
+#ifdef ENABLE_OBSERVER_SAVEPOINTS
 bool MyMesh::createObserverSavepoint(const uint16_t* activity_bins, uint8_t bin_count, uint8_t newest_bin, char* status, size_t status_size) {
   if (status && status_size) status[0] = 0;
   if (!_fs) return false;
@@ -1692,6 +1712,7 @@ bool MyMesh::createObserverSavepoint(const uint16_t* activity_bins, uint8_t bin_
   if (status && status_size) snprintf(status, status_size, "SP %u saved", (unsigned int)next_id);
   return true;
 }
+#endif
 
 void MyMesh::resetObserverLiveStats() {
   observer_rx_packets = 0;
@@ -1986,7 +2007,9 @@ void MyMesh::handleCommand(uint32_t sender_timestamp, char *command, char *reply
       Serial.printf("\n");
     }
     reply[0] = 0;
-  } else if (strcmp(command, "sp.list") == 0) {
+  }
+#ifdef ENABLE_OBSERVER_SAVEPOINTS
+  else if (strcmp(command, "sp.list") == 0) {
     File f = _fs->open(SAVEPOINT_INDEX_FILE);
     if (!f) {
       strcpy(reply, "SP none");
@@ -2138,7 +2161,9 @@ void MyMesh::handleCommand(uint32_t sender_timestamp, char *command, char *reply
     }
     _fs->remove(SAVEPOINT_INDEX_FILE);
     strcpy(reply, "OK - SP cleared");
-  } else if (memcmp(command, "discover.neighbors", 18) == 0) {
+  }
+#endif
+  else if (memcmp(command, "discover.neighbors", 18) == 0) {
     const char* sub = command + 18;
     while (*sub == ' ') sub++;
     if (*sub != 0) {

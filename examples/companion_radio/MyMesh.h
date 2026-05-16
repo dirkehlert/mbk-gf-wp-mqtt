@@ -84,6 +84,30 @@ struct AdvertPath {
   uint8_t path[MAX_PATH_SIZE];
 };
 
+#define MONITOR_PATH_HISTORY_SIZE       24
+#define MONITOR_PATH_TEXT_SIZE          36
+#define MONITOR_PATH_KEY_SIZE           (MAX_PATH_SIZE * 2 + 4)
+#define MONITOR_PATH_DISPLAY_HOPS       3
+#define MONITOR_LAST_HOP_HISTORY_SIZE   24
+#define MONITOR_LAST_HOP_TEXT_SIZE      8
+#define MONITOR_ACTIVITY_BINS           12
+#define MONITOR_ACTIVITY_BIN_MILLIS     60000
+
+struct MonitorPathInfo {
+  unsigned long seen_at;
+  uint16_t count;
+  char text[MONITOR_PATH_TEXT_SIZE];
+  char key[MONITOR_PATH_KEY_SIZE];
+};
+
+struct MonitorLastHopInfo {
+  unsigned long seen_at;
+  int8_t last_snr;
+  int8_t max_snr;
+  char text[MONITOR_LAST_HOP_TEXT_SIZE];
+  char key[MONITOR_LAST_HOP_TEXT_SIZE];
+};
+
 class MyMesh : public BaseChatMesh, public DataStoreHost {
 public:
   MyMesh(mesh::Radio &radio, mesh::RNG &rng, mesh::RTCClock &rtc, SimpleMeshTables &tables, DataStore& store, AbstractUITask* ui=NULL);
@@ -101,6 +125,14 @@ public:
   void enterCLIRescue();
 
   int  getRecentlyHeard(AdvertPath dest[], int max_num);
+  uint32_t getMonitorRxPackets() const { return monitor_rx_packets; }
+  int getMonitorNoiseFloor() const { return _radio->getNoiseFloor(); }
+  float getMonitorLastSnr() const { return monitor_last_snr_x4 / 4.0f; }
+  bool getMonitorPathLine(uint8_t index, char* dest, size_t dest_size) const;
+  bool getMonitorPathMetaLine(uint8_t index, char* dest, size_t dest_size) const;
+  bool getMonitorLatestPathLine(char* dest, size_t dest_size) const;
+  bool getMonitorLastHopLine(uint8_t index, char* dest, size_t dest_size) const;
+  uint8_t getMonitorActivity(uint16_t* dest, uint8_t max_count);
 
 protected:
   float getAirtimeBudgetFactor() const override;
@@ -117,6 +149,7 @@ protected:
   void sendFloodScoped(const mesh::GroupChannel& channel, mesh::Packet* pkt, uint32_t delay_millis=0) override;
 
   void logRxRaw(float snr, float rssi, const uint8_t raw[], int len) override;
+  void logRx(mesh::Packet* packet, int len, float score) override;
   bool isAutoAddEnabled() const override;
   bool shouldAutoAddContactType(uint8_t type) const override;
   bool shouldOverwriteWhenFull() const override;
@@ -195,6 +228,9 @@ private:
   void checkCLIRescueCmd();
   void checkSerialInterface();
   bool isValidClientRepeatFreq(uint32_t f) const;
+  void monitorRollActivity();
+  void rememberMonitorPath(const mesh::Packet* packet);
+  void rememberMonitorLastHop(const mesh::Packet* packet, int8_t snr_x4);
 
   // helpers, short-cuts
   void saveChannels() { _store->saveChannels(this); }
@@ -247,6 +283,14 @@ private:
 
   #define ADVERT_PATH_TABLE_SIZE   16
   AdvertPath advert_paths[ADVERT_PATH_TABLE_SIZE]; // circular table
+
+  uint32_t monitor_rx_packets;
+  int8_t monitor_last_snr_x4;
+  MonitorPathInfo monitor_paths[MONITOR_PATH_HISTORY_SIZE];
+  MonitorLastHopInfo monitor_last_hops[MONITOR_LAST_HOP_HISTORY_SIZE];
+  uint16_t monitor_activity_bins[MONITOR_ACTIVITY_BINS];
+  uint8_t monitor_activity_index;
+  unsigned long monitor_next_activity_rollover;
 };
 
 extern MyMesh the_mesh;

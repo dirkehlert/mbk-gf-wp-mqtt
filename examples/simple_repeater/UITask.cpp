@@ -56,6 +56,9 @@ void UITask::begin(NodePrefs* node_prefs, const char* build_date, const char* fi
 #ifdef PIN_USER_BTN
   user_btn.begin();
 #endif
+#if defined(FIELD_MONITOR_LITE) && defined(BUTTON_PIN2)
+  user_btn2.begin();
+#endif
 
   // strip off dash and commit hash by changing dash to null terminator
   // e.g: v1.2.3-abcdef -> v1.2.3
@@ -128,7 +131,13 @@ void UITask::updateRxActivityBins() {
     changed = true;
   }
 
-  if (changed && (_screen == 1 || _screen == 2)) {
+  if (changed && (
+#ifdef FIELD_MONITOR_LITE
+      _screen == 1 || _screen == 2 || _screen == 3
+#else
+      _screen == 1 || _screen == 2
+#endif
+      )) {
     _next_refresh = 0;
   }
 }
@@ -166,6 +175,31 @@ void UITask::renderRxActivityChart() {
   _display->print(label);
 }
 
+void UITask::renderRxActivityHistogram() {
+  const int left = UI_LEFT_MARGIN;
+  const int top = 18;
+  const int row_h = 8;
+  const int bar_w_max = _display->width() - left - 16;
+  uint16_t max_count = 1;
+
+  for (uint8_t i = 0; i < RX_ACTIVITY_BINS; i++) {
+    if (_activity_bins[i] > max_count) max_count = _activity_bins[i];
+  }
+
+  _display->setColor(DisplayDriver::LIGHT);
+  for (uint8_t i = 0; i < RX_ACTIVITY_BINS; i++) {
+    uint8_t idx = (_activity_bin_index + RX_ACTIVITY_BINS - i) % RX_ACTIVITY_BINS;
+    uint16_t value = _activity_bins[idx];
+    int y = top + i * row_h;
+    int bar_w = value == 0 ? 0 : (int)((uint32_t)value * bar_w_max / max_count);
+    if (bar_w > 0) _display->fillRect(left, y, bar_w, row_h - 2);
+  }
+
+  char label[24];
+  snprintf(label, sizeof(label), "range 0-%u / min", (unsigned int)max_count);
+  _display->drawTextEllipsized(left, top + RX_ACTIVITY_BINS * row_h + 2, _display->width() - left, label);
+}
+
 void UITask::syncObserverTotalsAfterReset() {
   uint32_t rx_total = _mesh ? _mesh->getObserverRxPackets() : 0;
   uint32_t mqtt_total = _mesh ? _mesh->getObserverMqttPublished() : 0;
@@ -198,7 +232,96 @@ void UITask::renderCurrScreen() {
     uint16_t typeWidth = _display->getTextWidth(node_type);
     _display->setCursor((_display->width() - typeWidth) / 2, 35);
     _display->print(node_type);
-  } else if (_screen == 0) {  // home screen
+  }
+#ifdef FIELD_MONITOR_LITE
+  else if (_screen == 0) {  // status screen
+    _display->setCursor(UI_LEFT_MARGIN, 0);
+    _display->setTextSize(1);
+    _display->setColor(DisplayDriver::GREEN);
+    _display->print(_node_prefs->node_name);
+
+    _display->setColor(DisplayDriver::LIGHT);
+    _display->setCursor(UI_LEFT_MARGIN, 14);
+    sprintf(tmp, "F:%06.3f SF%d", _node_prefs->freq, _node_prefs->sf);
+    _display->print(tmp);
+    _display->setCursor(UI_LEFT_MARGIN, 25);
+    snprintf(tmp, sizeof(tmp), "BW:%03.2f CR:%d NF:%d", _node_prefs->bw, _node_prefs->cr,
+             _mesh ? _mesh->getObserverNoiseFloor() : 0);
+    _display->print(tmp);
+    if (_mesh) {
+      uint32_t rx_total = _mesh->getObserverRxPackets();
+      _display->setCursor(UI_LEFT_MARGIN, 39);
+      snprintf(tmp, sizeof(tmp), "RX:%lu 1m:%lu",
+               (unsigned long)rx_total,
+               (unsigned long)(rx_total - _prev_rx_total));
+      _display->print(tmp);
+      _display->setCursor(UI_LEFT_MARGIN, 51);
+      snprintf(tmp, sizeof(tmp), "SNR: %.1f", _mesh->getObserverLastSnr());
+      _display->print(tmp);
+      _mesh->getObserverDiagLine(tmp, sizeof(tmp));
+      _display->drawTextEllipsized(UI_LEFT_MARGIN, 64, _display->width() - UI_LEFT_MARGIN, tmp);
+      renderBattery(_mesh->getObserverBattMilliVolts(), UI_LEFT_MARGIN, 78);
+      _display->drawTextEllipsized(UI_LEFT_MARGIN, 92, _display->width() - UI_LEFT_MARGIN, "Last path");
+      if (_mesh->getObserverLatestPathLine(tmp, sizeof(tmp))) {
+        _display->drawTextEllipsized(UI_LEFT_MARGIN, 104, _display->width() - UI_LEFT_MARGIN, tmp);
+      } else {
+        _display->drawTextEllipsized(UI_LEFT_MARGIN, 104, _display->width() - UI_LEFT_MARGIN, "-");
+      }
+    }
+  } else if (_screen == 1) {  // paths screen
+    _display->setTextSize(1);
+    _display->setCursor(UI_LEFT_MARGIN, 0);
+    _display->setColor(DisplayDriver::GREEN);
+    _display->print("Paths");
+    _display->setColor(DisplayDriver::LIGHT);
+    if (_mesh) {
+      _display->drawTextEllipsized(UI_LEFT_MARGIN, 16, _display->width() - UI_LEFT_MARGIN, "Cnt   Age  Path");
+      bool any = false;
+      for (uint8_t i = 0; i < 8; i++) {
+        if (_mesh->getObserverPathLine(i, tmp, sizeof(tmp))) {
+          _display->drawTextEllipsized(UI_LEFT_MARGIN, 28 + i * 11, _display->width() - UI_LEFT_MARGIN, tmp);
+          any = true;
+        }
+      }
+      if (!any) _display->drawTextEllipsized(UI_LEFT_MARGIN, 30, _display->width() - UI_LEFT_MARGIN, "No RX paths");
+    }
+  } else if (_screen == 2) {  // heards screen
+    _display->setTextSize(1);
+    _display->setCursor(UI_LEFT_MARGIN, 0);
+    _display->setColor(DisplayDriver::GREEN);
+    _display->print("Heards");
+    _display->setColor(DisplayDriver::LIGHT);
+    if (_mesh) {
+      _display->drawTextEllipsized(UI_LEFT_MARGIN, 16, _display->width() - UI_LEFT_MARGIN, "Hop    Age   Max   Last");
+      bool any = false;
+      for (uint8_t i = 0; i < 8; i++) {
+        if (_mesh->getObserverLastHopLine(i, tmp, sizeof(tmp))) {
+          _display->drawTextEllipsized(UI_LEFT_MARGIN, 28 + i * 11, _display->width() - UI_LEFT_MARGIN, tmp);
+          any = true;
+        }
+      }
+      if (!any) _display->drawTextEllipsized(UI_LEFT_MARGIN, 30, _display->width() - UI_LEFT_MARGIN, "No RX hops");
+    }
+  } else if (_screen == 3) {  // histogram screen
+    _display->setTextSize(1);
+    _display->setCursor(UI_LEFT_MARGIN, 0);
+    _display->setColor(DisplayDriver::GREEN);
+    _display->print("Histogram");
+    renderRxActivityHistogram();
+  } else {  // advert screen
+    _display->setTextSize(1);
+    _display->setCursor(UI_LEFT_MARGIN, 0);
+    _display->setColor(DisplayDriver::GREEN);
+    _display->print("Advert");
+    _display->setColor(DisplayDriver::LIGHT);
+    _display->drawTextEllipsized(UI_LEFT_MARGIN, 24, _display->width() - UI_LEFT_MARGIN, "Double: advert");
+    _display->drawTextEllipsized(UI_LEFT_MARGIN, 38, _display->width() - UI_LEFT_MARGIN, "Long: flood advert");
+    if (_status[0] && millis() < _status_until) {
+      _display->drawTextEllipsized(UI_LEFT_MARGIN, 64, _display->width() - UI_LEFT_MARGIN, _status);
+    }
+  }
+#else
+  else if (_screen == 0) {  // home screen
     // node name
     _display->setCursor(UI_LEFT_MARGIN, 0);
     _display->setTextSize(1);
@@ -381,10 +504,21 @@ void UITask::renderCurrScreen() {
       _display->print(_status);
     }
   }
+#endif
 }
 
 #ifdef ENABLE_DISPLAY_DUMP
 const char* UITask::screenName(uint8_t screen) {
+#ifdef FIELD_MONITOR_LITE
+  switch (screen) {
+    case 0: return "status";
+    case 1: return "paths";
+    case 2: return "heards";
+    case 3: return "histogram";
+    case 4: return "advert";
+    default: return "unknown";
+  }
+#else
   switch (screen) {
     case 0: return "status";
     case 1: return "paths";
@@ -393,6 +527,7 @@ const char* UITask::screenName(uint8_t screen) {
     case 4: return "mqtt";
     default: return "unknown";
   }
+#endif
 }
 
 bool UITask::renderScreenForDump(uint8_t screen) {
@@ -423,6 +558,15 @@ void UITask::loop() {
           _screen = (_screen + 1) % 5;
           _status[0] = 0;
         } else if (ev == BUTTON_EVENT_DOUBLE_CLICK) {
+#ifdef FIELD_MONITOR_LITE
+          if (_screen == 1 || _screen == 2) {
+            _screen = _screen == 1 ? 2 : 1;
+            _status[0] = 0;
+          } else if (_screen == 4) {
+            _mesh->sendSelfAdvertisement(0, false);
+            strcpy(_status, "Advert sent");
+          }
+#else
           if (_screen == 1 || _screen == 2) {
             _screen = _screen == 1 ? 2 : 1;
             _status[0] = 0;
@@ -432,7 +576,17 @@ void UITask::loop() {
             _mesh->sendSelfAdvertisement(0, false);
             strcpy(_status, "Advert sent");
           }
+#endif
         } else if (ev == BUTTON_EVENT_LONG_PRESS) {
+#ifdef FIELD_MONITOR_LITE
+          if (_screen == 2) {
+            _mesh->sendNodeDiscoverReq();
+            strcpy(_status, "Discover sent");
+          } else if (_screen == 4) {
+            _mesh->sendSelfAdvertisement(0, true);
+            strcpy(_status, "Flood advert sent");
+          }
+#else
           if (_screen == 4) {
             bool enabled = _mesh->toggleObserverMqttEnabled();
             strcpy(_status, enabled ? "WiFi/MQTT on" : "WiFi/MQTT off");
@@ -467,11 +621,39 @@ void UITask::loop() {
             _mesh->sendSelfAdvertisement(0, true);
             strcpy(_status, "Flood advert sent");
           }
+#endif
         }
         _status_until = millis() + 4000;
         _next_refresh = 0;
       }
     }
+#if defined(FIELD_MONITOR_LITE) && defined(BUTTON_PIN2)
+    int ev2 = user_btn2.check();
+    if (ev2 != BUTTON_EVENT_NONE) {
+      _display->turnOn();
+      _auto_off = millis() + AUTO_OFF_MILLIS;
+
+      if (_mesh) {
+        if (ev2 == BUTTON_EVENT_CLICK) {
+          _screen = (_screen + 4) % 5;
+          _status[0] = 0;
+        } else if (ev2 == BUTTON_EVENT_DOUBLE_CLICK) {
+          if (_screen == 1 || _screen == 2) {
+            _screen = _screen == 1 ? 2 : 1;
+          } else {
+            _screen = 1;
+          }
+          _status[0] = 0;
+        } else if (ev2 == BUTTON_EVENT_LONG_PRESS) {
+          _mesh->resetObserverLiveStats();
+          syncObserverTotalsAfterReset();
+          strcpy(_status, "Live counters reset");
+        }
+        _status_until = millis() + 4000;
+        _next_refresh = 0;
+      }
+    }
+#endif
     _next_read = millis() + 50;
   }
 #endif
@@ -489,7 +671,13 @@ void UITask::loop() {
     _next_refresh = 0;
   }
 
-  if (_mesh && (_screen == 1 || _screen == 2)) {
+  if (_mesh && (
+#ifdef FIELD_MONITOR_LITE
+      _screen == 1 || _screen == 2 || _screen == 3
+#else
+      _screen == 1 || _screen == 2
+#endif
+      )) {
     uint32_t rx_total = _mesh->getObserverRxPackets();
     if (rx_total != _render_rx_total) {
       _render_rx_total = rx_total;
@@ -503,8 +691,14 @@ void UITask::loop() {
       renderCurrScreen();
       _display->endFrame();
 
-      _next_refresh = millis() + ((_screen == 1 || _screen == 2) ? 60000 : 1000);
-      if (_screen == 1 || _screen == 2) {
+      bool slow_screen =
+#ifdef FIELD_MONITOR_LITE
+          (_screen == 1 || _screen == 2 || _screen == 3);
+#else
+          (_screen == 1 || _screen == 2);
+#endif
+      _next_refresh = millis() + (slow_screen ? 60000 : 1000);
+      if (slow_screen) {
         _auto_off = _next_refresh + 5000;
       }
     }

@@ -80,6 +80,9 @@ class HomeScreen : public UIScreen {
     FIRST,
     RECENT,
     RADIO,
+    PATHS,
+    HEARDS,
+    HISTOGRAM,
     BLUETOOTH,
     ADVERT,
 #if ENV_INCLUDE_GPS == 1
@@ -270,6 +273,75 @@ public:
       display.setCursor(0, 53);
       sprintf(tmp, "Noise floor: %d", radio_driver.getNoiseFloor());
       display.print(tmp);
+      display.setCursor(0, 64);
+      sprintf(tmp, "RX: %lu  SNR: %.1f",
+              (unsigned long)the_mesh.getMonitorRxPackets(), the_mesh.getMonitorLastSnr());
+      display.print(tmp);
+      display.setCursor(0, 75);
+      display.print("Last path:");
+      if (the_mesh.getMonitorLatestPathLine(tmp, sizeof(tmp))) {
+        display.drawTextEllipsized(0, 86, display.width(), tmp);
+      } else {
+        display.setCursor(0, 86);
+        display.print("-");
+      }
+    } else if (_page == HomePage::PATHS) {
+      display.setColor(DisplayDriver::GREEN);
+      display.setTextSize(1);
+      display.setCursor(0, 20);
+      display.print("Paths");
+      display.setColor(DisplayDriver::LIGHT);
+      bool any = false;
+      int y = 34;
+      for (uint8_t i = 0; i < 4; i++) {
+        if (the_mesh.getMonitorPathLine(i, tmp, sizeof(tmp))) {
+          char meta[28];
+          if (the_mesh.getMonitorPathMetaLine(i, meta, sizeof(meta))) {
+            display.drawTextEllipsized(0, y, display.width(), meta);
+            y += 10;
+          }
+          display.drawTextEllipsized(0, y, display.width(), tmp);
+          y += 13;
+          any = true;
+        }
+      }
+      if (!any) display.drawTextEllipsized(0, 36, display.width(), "No RX paths");
+    } else if (_page == HomePage::HEARDS) {
+      display.setColor(DisplayDriver::GREEN);
+      display.setTextSize(1);
+      display.setCursor(0, 20);
+      display.print("Heard repeaters");
+      display.setColor(DisplayDriver::LIGHT);
+      bool any = false;
+      for (uint8_t i = 0; i < 7; i++) {
+        if (the_mesh.getMonitorLastHopLine(i, tmp, sizeof(tmp))) {
+          display.drawTextEllipsized(0, 34 + i * 12, display.width(), tmp);
+          any = true;
+        }
+      }
+      if (!any) display.drawTextEllipsized(0, 36, display.width(), "No RX hops");
+    } else if (_page == HomePage::HISTOGRAM) {
+      uint16_t bins[MONITOR_ACTIVITY_BINS];
+      uint8_t bin_count = the_mesh.getMonitorActivity(bins, MONITOR_ACTIVITY_BINS);
+      uint16_t max_bin = 1;
+      for (uint8_t i = 0; i < bin_count; i++) {
+        if (bins[i] > max_bin) max_bin = bins[i];
+      }
+
+      display.setColor(DisplayDriver::GREEN);
+      display.setTextSize(1);
+      display.setCursor(0, 20);
+      snprintf(tmp, sizeof(tmp), "RX/min 0-%u", (unsigned int)max_bin);
+      display.print(tmp);
+      display.setColor(DisplayDriver::LIGHT);
+      int top = 34;
+      int row_h = 7;
+      int bar_w_max = display.width() - 10;
+      for (uint8_t i = 0; i < bin_count; i++) {
+        int bar_w = bins[i] == 0 ? 0 : (int)((uint32_t)bins[i] * bar_w_max / max_bin);
+        int y = top + i * row_h;
+        if (bar_w > 0) display.fillRect(0, y, bar_w, row_h - 2);
+      }
     } else if (_page == HomePage::BLUETOOTH) {
       display.setColor(DisplayDriver::GREEN);
       display.drawXbm((display.width() - 32) / 2, 18,
@@ -628,7 +700,9 @@ void UITask::newMsg(uint8_t path_len, const char* from_name, const char* text, i
   _msgcount = msgcount;
 
   ((MsgPreviewScreen *) msg_preview)->addPreview(path_len, from_name, text);
-  setCurrScreen(msg_preview);
+  if (curr == msg_preview) {
+    setCurrScreen(msg_preview);
+  }
 
   if (_display != NULL) {
     if (!_display->isOn() && !hasConnection()) {

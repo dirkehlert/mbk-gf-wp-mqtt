@@ -292,6 +292,340 @@ void MyMesh::logRxRaw(float snr, float rssi, const uint8_t raw[], int len) {
   }
 }
 
+static void formatMonitorAge(char* dest, size_t dest_size, unsigned long age_secs) {
+  if (age_secs <= 180) {
+    snprintf(dest, dest_size, "%lus", age_secs);
+  } else {
+    unsigned long age_mins = age_secs / 60;
+    if (age_mins > 999) {
+      snprintf(dest, dest_size, ">999");
+    } else {
+      snprintf(dest, dest_size, "%lum", age_mins);
+    }
+  }
+}
+
+static void formatMonitorSnrX4(char* dest, size_t dest_size, int8_t snr_x4) {
+  int value = snr_x4;
+  int abs_value = abs(value);
+  int whole = abs_value / 4;
+  snprintf(dest, dest_size, "%s%d", value < 0 ? "-" : "", whole);
+}
+
+void MyMesh::monitorRollActivity() {
+  unsigned long now = millis();
+  if (monitor_next_activity_rollover == 0) {
+    monitor_next_activity_rollover = now + MONITOR_ACTIVITY_BIN_MILLIS;
+    return;
+  }
+  while ((long)(now - monitor_next_activity_rollover) >= 0) {
+    monitor_activity_index = (monitor_activity_index + 1) % MONITOR_ACTIVITY_BINS;
+    monitor_activity_bins[monitor_activity_index] = 0;
+    monitor_next_activity_rollover += MONITOR_ACTIVITY_BIN_MILLIS;
+  }
+}
+
+void MyMesh::rememberMonitorPath(const mesh::Packet* packet) {
+  uint8_t hash_size = packet->getPathHashSize();
+  uint8_t hash_count = packet->getPathHashCount();
+  uint8_t display_hops = min((uint8_t)MONITOR_PATH_DISPLAY_HOPS, hash_count);
+  char text[MONITOR_PATH_TEXT_SIZE];
+  char key[MONITOR_PATH_KEY_SIZE];
+  int written = snprintf(text, sizeof(text), "%u ", (unsigned int)hash_count);
+  int key_written = snprintf(key, sizeof(key), "%u:", (unsigned int)hash_size);
+  size_t key_pos = key_written > 0 ? (size_t)key_written : 0;
+
+  if (written < 0) {
+    text[0] = 0;
+  } else if (hash_count == 0) {
+    snprintf(&text[written], sizeof(text) - written, "-");
+  } else {
+    size_t pos = (size_t)written;
+    const char* hex = "0123456789ABCDEF";
+    for (uint8_t n = 0; n < display_hops && pos + 2 < sizeof(text); n++) {
+      uint8_t i = hash_count - n;
+      if (n > 0 && pos + 1 < sizeof(text)) text[pos++] = ' ';
+      const uint8_t* hash = &packet->path[(i - 1) * hash_size];
+      for (uint8_t j = 0; j < hash_size && pos + 2 < sizeof(text); j++) {
+        text[pos++] = hex[hash[j] >> 4];
+        text[pos++] = hex[hash[j] & 0x0F];
+      }
+    }
+    if (hash_count > display_hops && pos + 2 < sizeof(text)) {
+      text[pos++] = ' ';
+      text[pos++] = '+';
+    }
+    text[pos] = 0;
+  }
+
+  const char* hex = "0123456789ABCDEF";
+  uint16_t path_bytes = min((uint16_t)(hash_count * hash_size), (uint16_t)MAX_PATH_SIZE);
+  for (uint16_t i = 0; i < path_bytes && key_pos + 2 < sizeof(key); i++) {
+    key[key_pos++] = hex[packet->path[i] >> 4];
+    key[key_pos++] = hex[packet->path[i] & 0x0F];
+  }
+  key[key_pos] = 0;
+
+  unsigned long now = millis();
+  for (uint8_t i = 0; i < MONITOR_PATH_HISTORY_SIZE; i++) {
+    MonitorPathInfo& existing = monitor_paths[i];
+    if (existing.seen_at == 0) continue;
+    if (strcmp(existing.key, key) == 0) {
+      existing.seen_at = now;
+      if (existing.count < 0xFFFF) existing.count++;
+      return;
+    }
+  }
+
+  int slot = -1;
+  unsigned long oldest_seen = 0xFFFFFFFF;
+  uint16_t lowest_count = 0xFFFF;
+  for (uint8_t i = 0; i < MONITOR_PATH_HISTORY_SIZE; i++) {
+    MonitorPathInfo& item = monitor_paths[i];
+    if (item.seen_at == 0) {
+      slot = i;
+      break;
+    }
+    if (item.count < lowest_count || (item.count == lowest_count && item.seen_at < oldest_seen)) {
+      slot = i;
+      lowest_count = item.count;
+      oldest_seen = item.seen_at;
+    }
+  }
+
+  MonitorPathInfo& item = monitor_paths[slot >= 0 ? slot : 0];
+  item.seen_at = now;
+  item.count = 1;
+  StrHelper::strncpy(item.text, text, sizeof(item.text));
+  StrHelper::strncpy(item.key, key, sizeof(item.key));
+}
+
+void MyMesh::rememberMonitorLastHop(const mesh::Packet* packet, int8_t snr_x4) {
+  uint8_t hash_size = packet->getPathHashSize();
+  uint8_t hash_count = packet->getPathHashCount();
+  char text[MONITOR_LAST_HOP_TEXT_SIZE];
+  char key[MONITOR_LAST_HOP_TEXT_SIZE];
+  const char* hex = "0123456789ABCDEF";
+  size_t pos = 0;
+
+  if (hash_count == 0) {
+    StrHelper::strncpy(text, "-", sizeof(text));
+    StrHelper::strncpy(key, "0:-", sizeof(key));
+  } else {
+    const uint8_t* hash = &packet->path[(hash_count - 1) * hash_size];
+    for (uint8_t i = 0; i < hash_size && pos + 2 < sizeof(text); i++) {
+      text[pos++] = hex[hash[i] >> 4];
+      text[pos++] = hex[hash[i] & 0x0F];
+    }
+    text[pos] = 0;
+    snprintf(key, sizeof(key), "%u:%s", (unsigned int)hash_size, text);
+  }
+
+  unsigned long now = millis();
+  for (uint8_t i = 0; i < MONITOR_LAST_HOP_HISTORY_SIZE; i++) {
+    MonitorLastHopInfo& item = monitor_last_hops[i];
+    if (item.seen_at == 0) continue;
+    if (strcmp(item.key, key) == 0) {
+      item.seen_at = now;
+      item.last_snr = snr_x4;
+      if (snr_x4 > item.max_snr) item.max_snr = snr_x4;
+      return;
+    }
+  }
+
+  int slot = -1;
+  unsigned long oldest_seen = 0xFFFFFFFF;
+  for (uint8_t i = 0; i < MONITOR_LAST_HOP_HISTORY_SIZE; i++) {
+    MonitorLastHopInfo& item = monitor_last_hops[i];
+    if (item.seen_at == 0) {
+      slot = i;
+      break;
+    }
+    if (item.seen_at < oldest_seen) {
+      slot = i;
+      oldest_seen = item.seen_at;
+    }
+  }
+
+  MonitorLastHopInfo& item = monitor_last_hops[slot >= 0 ? slot : 0];
+  item.seen_at = now;
+  item.last_snr = snr_x4;
+  item.max_snr = snr_x4;
+  StrHelper::strncpy(item.text, text, sizeof(item.text));
+  StrHelper::strncpy(item.key, key, sizeof(item.key));
+}
+
+void MyMesh::logRx(mesh::Packet* packet, int len, float score) {
+  (void)len;
+  (void)score;
+  monitorRollActivity();
+  monitor_rx_packets++;
+  monitor_activity_bins[monitor_activity_index]++;
+  monitor_last_snr_x4 = (int8_t)(packet->getSNR() * 4);
+  rememberMonitorPath(packet);
+  rememberMonitorLastHop(packet, monitor_last_snr_x4);
+}
+
+bool MyMesh::getMonitorPathLine(uint8_t index, char* dest, size_t dest_size) const {
+  if (!dest || dest_size == 0) return false;
+  dest[0] = 0;
+
+  uint8_t found = 0;
+  bool selected[MONITOR_PATH_HISTORY_SIZE];
+  memset(selected, 0, sizeof(selected));
+
+  for (uint8_t i = 0; i < MONITOR_PATH_HISTORY_SIZE; i++) {
+    int best = -1;
+    uint16_t best_count = 0;
+    unsigned long best_seen = 0;
+
+    for (uint8_t j = 0; j < MONITOR_PATH_HISTORY_SIZE; j++) {
+      const MonitorPathInfo& item = monitor_paths[j];
+      if (item.seen_at == 0 || selected[j]) continue;
+
+      if (item.count > best_count || (item.count == best_count && item.seen_at > best_seen)) {
+        best = j;
+        best_count = item.count;
+        best_seen = item.seen_at;
+      }
+    }
+
+    if (best < 0) return false;
+    selected[best] = true;
+    if (found == index) {
+      const MonitorPathInfo& item = monitor_paths[best];
+      snprintf(dest, dest_size, "%s", item.text);
+      return true;
+    }
+    found++;
+  }
+  return false;
+}
+
+bool MyMesh::getMonitorPathMetaLine(uint8_t index, char* dest, size_t dest_size) const {
+  if (!dest || dest_size == 0) return false;
+  dest[0] = 0;
+
+  uint8_t found = 0;
+  unsigned long now = millis();
+  bool selected[MONITOR_PATH_HISTORY_SIZE];
+  memset(selected, 0, sizeof(selected));
+
+  for (uint8_t i = 0; i < MONITOR_PATH_HISTORY_SIZE; i++) {
+    int best = -1;
+    uint16_t best_count = 0;
+    unsigned long best_seen = 0;
+
+    for (uint8_t j = 0; j < MONITOR_PATH_HISTORY_SIZE; j++) {
+      const MonitorPathInfo& item = monitor_paths[j];
+      if (item.seen_at == 0 || selected[j]) continue;
+
+      if (item.count > best_count || (item.count == best_count && item.seen_at > best_seen)) {
+        best = j;
+        best_count = item.count;
+        best_seen = item.seen_at;
+      }
+    }
+
+    if (best < 0) return false;
+    selected[best] = true;
+    if (found == index) {
+      const MonitorPathInfo& item = monitor_paths[best];
+      char count_col[6];
+      char age_col[5];
+      unsigned long age_secs = (now - item.seen_at) / 1000;
+      if (item.count > 999) {
+        snprintf(count_col, sizeof(count_col), "999+");
+      } else {
+        snprintf(count_col, sizeof(count_col), "%u", (unsigned int)item.count);
+      }
+      formatMonitorAge(age_col, sizeof(age_col), age_secs);
+      snprintf(dest, dest_size, "cnt %s  age %s", count_col, age_col);
+      return true;
+    }
+    found++;
+  }
+  return false;
+}
+
+bool MyMesh::getMonitorLatestPathLine(char* dest, size_t dest_size) const {
+  if (!dest || dest_size == 0) return false;
+  dest[0] = 0;
+
+  int best = -1;
+  unsigned long best_seen = 0;
+  for (uint8_t i = 0; i < MONITOR_PATH_HISTORY_SIZE; i++) {
+    const MonitorPathInfo& item = monitor_paths[i];
+    if (item.seen_at == 0) continue;
+    if (item.seen_at > best_seen) {
+      best = i;
+      best_seen = item.seen_at;
+    }
+  }
+
+  if (best < 0) return false;
+
+  const MonitorPathInfo& item = monitor_paths[best];
+  char age_col[5];
+  unsigned long age_secs = (millis() - item.seen_at) / 1000;
+  formatMonitorAge(age_col, sizeof(age_col), age_secs);
+  snprintf(dest, dest_size, "%s %s", age_col, item.text);
+  return true;
+}
+
+bool MyMesh::getMonitorLastHopLine(uint8_t index, char* dest, size_t dest_size) const {
+  if (!dest || dest_size == 0) return false;
+  dest[0] = 0;
+
+  uint8_t found = 0;
+  unsigned long now = millis();
+  bool selected[MONITOR_LAST_HOP_HISTORY_SIZE];
+  memset(selected, 0, sizeof(selected));
+
+  for (uint8_t i = 0; i < MONITOR_LAST_HOP_HISTORY_SIZE; i++) {
+    int best = -1;
+    unsigned long best_seen = 0;
+
+    for (uint8_t j = 0; j < MONITOR_LAST_HOP_HISTORY_SIZE; j++) {
+      const MonitorLastHopInfo& item = monitor_last_hops[j];
+      if (item.seen_at == 0 || selected[j]) continue;
+
+      if (item.seen_at > best_seen) {
+        best = j;
+        best_seen = item.seen_at;
+      }
+    }
+
+    if (best < 0) return false;
+    selected[best] = true;
+    if (found == index) {
+      const MonitorLastHopInfo& item = monitor_last_hops[best];
+      char age_col[5];
+      char max_col[8];
+      char last_col[8];
+      unsigned long age_secs = (now - item.seen_at) / 1000;
+      formatMonitorAge(age_col, sizeof(age_col), age_secs);
+      formatMonitorSnrX4(max_col, sizeof(max_col), item.max_snr);
+      formatMonitorSnrX4(last_col, sizeof(last_col), item.last_snr);
+      snprintf(dest, dest_size, "Rep %s %s %s/%s", item.text, age_col, max_col, last_col);
+      return true;
+    }
+    found++;
+  }
+  return false;
+}
+
+uint8_t MyMesh::getMonitorActivity(uint16_t* dest, uint8_t max_count) {
+  if (!dest || max_count == 0) return 0;
+  monitorRollActivity();
+  uint8_t count = min(max_count, (uint8_t)MONITOR_ACTIVITY_BINS);
+  for (uint8_t i = 0; i < count; i++) {
+    uint8_t idx = (monitor_activity_index + MONITOR_ACTIVITY_BINS - i) % MONITOR_ACTIVITY_BINS;
+    dest[i] = monitor_activity_bins[idx];
+  }
+  return count;
+}
+
 bool MyMesh::isAutoAddEnabled() const {
   return (_prefs.manual_add_contacts & 1) == 0;
 }
@@ -856,6 +1190,13 @@ MyMesh::MyMesh(mesh::Radio &radio, mesh::RNG &rng, mesh::RTCClock &rtc, SimpleMe
   dirty_contacts_expiry = 0;
   memset(advert_paths, 0, sizeof(advert_paths));
   memset(send_scope.key, 0, sizeof(send_scope.key));
+  monitor_rx_packets = 0;
+  monitor_last_snr_x4 = 0;
+  monitor_activity_index = 0;
+  monitor_next_activity_rollover = 0;
+  memset(monitor_paths, 0, sizeof(monitor_paths));
+  memset(monitor_last_hops, 0, sizeof(monitor_last_hops));
+  memset(monitor_activity_bins, 0, sizeof(monitor_activity_bins));
 
   // defaults
   memset(&_prefs, 0, sizeof(_prefs));

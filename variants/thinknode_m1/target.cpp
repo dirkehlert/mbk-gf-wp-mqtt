@@ -17,6 +17,9 @@ ThinkNodeM1SensorManager sensors = ThinkNodeM1SensorManager(nmea);
 #ifdef DISPLAY_CLASS
   DISPLAY_CLASS display;
   MomentaryButton user_btn(PIN_USER_BTN, 1000, true);
+  #ifdef BUTTON_PIN2
+    MomentaryButton user_btn2(BUTTON_PIN2, 1000, true);
+  #endif
 #endif
 
 bool radio_init() {
@@ -150,4 +153,3 @@ bool ThinkNodeM1SensorManager::setSettingValue(const char* name, const char* val
   }
   return false;  // not supported
 }
-
