@@ -1,13 +1,20 @@
-# MBK GF WP MQTT
+# MBK GF WP Field Monitor
 
-Projekt-Spec fuer einen Heltec Wireless Paper Node als MeshCore MQTT Observer.
+Projekt-Spec fuer einen Heltec Wireless Paper Node als mobiles MeshCore
+Feld-Monitoring-Geraet.
 
 ## Ziel
 
-Das Heltec Wireless Paper laeuft als passiver MeshCore Observer fuer den Bereich
-Braunschweig/Gifhorn. Empfangene MeshCore Pakete werden ueber WLAN an den
-MQTT-Broker von meshcorenetz.de publiziert. Das Geraet ist im Mesh als
-`MBK GF WP MQTT` sichtbar.
+Das Heltec Wireless Paper dient aktuell vor allem als passiver Feldmonitor fuer
+MeshCore im Bereich Braunschweig/Gifhorn. Im Vordergrund stehen Empfangs- und
+Aktivitaetsanalyse direkt am Geraet: gehoerte Pakete, Pfade, letzte Hops,
+Noise Floor, SNR, Histogramme und Savepoints fuer Tests mit Standorten,
+Antennen und Filtern.
+
+MQTT ist als vorbereitete Nebenstrecke integriert, steht derzeit aber nicht im
+Fokus. Der Node soll auch ohne WLAN/MQTT vollstaendig fuer das lokale
+Monitoring im Feld nutzbar bleiben. Das Geraet ist im Mesh als `MBK GF WP MQTT`
+sichtbar.
 
 ## Hardware
 
