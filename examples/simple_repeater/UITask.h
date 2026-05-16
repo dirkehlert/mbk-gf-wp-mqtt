@@ -2,6 +2,7 @@
 
 #include <helpers/ui/DisplayDriver.h>
 #include <helpers/CommonCLI.h>
+#include <Stream.h>
 #include <string.h>
 
 class MyMesh;
@@ -29,6 +30,7 @@ class UITask {
   uint8_t _activity_bin_index;
   unsigned long _next_activity_rollover;
   uint8_t _screen;
+  bool _dump_mode;
 
   void renderCurrScreen();
   void renderTopStats(int y = 0);
@@ -44,8 +46,14 @@ public:
     _activity_bin_index = 0;
     memset(_activity_bins, 0, sizeof(_activity_bins));
     _screen = 0;
+    _dump_mode = false;
   }
   void begin(NodePrefs* node_prefs, const char* build_date, const char* firmware_version, MyMesh* mesh = nullptr);
+#ifdef ENABLE_DISPLAY_DUMP
+  static uint8_t screenCount() { return 5; }
+  static const char* screenName(uint8_t screen);
+  bool renderScreenForDump(uint8_t screen);
+#endif
 
   void loop();
 };

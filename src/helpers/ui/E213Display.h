@@ -4,7 +4,16 @@
 
 #include <SPI.h>
 #include <Wire.h>
+#include <Stream.h>
+#ifdef ENABLE_DISPLAY_DUMP
+#define E213DISPLAY_RESTORE_PROTECTED
+#define protected public
+#endif
 #include <heltec-eink-modules.h>
+#ifdef E213DISPLAY_RESTORE_PROTECTED
+#undef protected
+#undef E213DISPLAY_RESTORE_PROTECTED
+#endif
 #include <CRC32.h>
 #include <helpers/RefCountedDigitalPin.h>
 
@@ -39,6 +48,9 @@ public:
   void drawXbm(int x, int y, const uint8_t *bits, int w, int h) override;
   uint16_t getTextWidth(const char *str) override;
   void endFrame() override;
+#ifdef ENABLE_DISPLAY_DUMP
+  void dumpPBM(Stream& out);
+#endif
 
 private:
   BaseDisplay* detectEInk();

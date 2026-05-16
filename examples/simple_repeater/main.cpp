@@ -123,6 +123,24 @@ void loop() {
   if (len > 0 && command[len - 1] == '\r') {  // received complete line
     Serial.print('\n');
     command[len - 1] = 0;  // replace newline with C string null terminator
+#if defined(ENABLE_DISPLAY_DUMP) && defined(DISPLAY_CLASS)
+    if (strncmp(command, "screen.dump", 11) == 0 && (command[11] == 0 || command[11] == ' ')) {
+      char* arg = command + 11;
+      while (*arg == ' ') arg++;
+      if (*arg) {
+        int screen = atoi(arg);
+        if (!ui_task.renderScreenForDump((uint8_t)screen)) {
+          Serial.println("ERR bad screen");
+        } else {
+          display.dumpPBM(Serial);
+        }
+      } else {
+        display.dumpPBM(Serial);
+      }
+      command[0] = 0;
+    } else
+#endif
+    {
     char reply[160];
     the_mesh.handleCommand(0, command, reply);  // NOTE: there is no sender_timestamp via serial!
     if (reply[0]) {
@@ -130,6 +148,7 @@ void loop() {
     }
 
     command[0] = 0;  // reset command buffer
+    }
   }
 
 #if defined(PIN_USER_BTN) && defined(_SEEED_SENSECAP_SOLAR_H_)

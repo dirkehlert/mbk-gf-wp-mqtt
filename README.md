@@ -119,6 +119,18 @@ erwartetes Payload-Format sinnvoll sein.
 
 ## Display
 
+![Aktueller Display-Snapshot](docs/screen-current.png)
+
+Screen-Galerie:
+
+| Status | Paths | Heards |
+| --- | --- | --- |
+| ![Status](docs/screens/00-status.png) | ![Paths](docs/screens/01-paths.png) | ![Heards](docs/screens/02-heards.png) |
+
+| Savepoints | MQTT |
+| --- | --- |
+| ![Savepoints](docs/screens/03-savepoints.png) | ![MQTT](docs/screens/04-mqtt.png) |
+
 Status-Screen:
 
 - Node-Name in eigener Kopfzeile
@@ -159,6 +171,13 @@ Savepoints-Screen:
 - Doppelklick erzeugt einen neuen Savepoint im Flash
 - Long Press setzt Live-Zaehler, Pfade und Heards zurueck
 - Histogramme laufen beim Reset weiter und werden beim Savepoint mitgespeichert
+
+Display-Snapshot aktualisieren:
+
+```sh
+tools/capture_screen.py --port /dev/cu.usbserial-0001 --output docs/screen-current.png
+tools/capture_screen.py --port /dev/cu.usbserial-0001 --all
+```
 
 ## Uhrzeit
 

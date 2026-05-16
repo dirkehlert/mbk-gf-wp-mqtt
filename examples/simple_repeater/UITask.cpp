@@ -179,7 +179,7 @@ void UITask::syncObserverTotalsAfterReset() {
 
 void UITask::renderCurrScreen() {
   char tmp[80];
-  if (millis() < BOOT_SCREEN_MILLIS) { // boot screen
+  if (!_dump_mode && millis() < BOOT_SCREEN_MILLIS) { // boot screen
     // meshcore logo
     _display->setColor(DisplayDriver::BLUE);
     int logoWidth = 128;
@@ -378,6 +378,33 @@ void UITask::renderCurrScreen() {
     }
   }
 }
+
+#ifdef ENABLE_DISPLAY_DUMP
+const char* UITask::screenName(uint8_t screen) {
+  switch (screen) {
+    case 0: return "status";
+    case 1: return "paths";
+    case 2: return "heards";
+    case 3: return "savepoints";
+    case 4: return "mqtt";
+    default: return "unknown";
+  }
+}
+
+bool UITask::renderScreenForDump(uint8_t screen) {
+  if (screen >= screenCount()) return false;
+
+  uint8_t prev_screen = _screen;
+  bool prev_dump_mode = _dump_mode;
+  _screen = screen;
+  _dump_mode = true;
+  _display->startFrame();
+  renderCurrScreen();
+  _dump_mode = prev_dump_mode;
+  _screen = prev_screen;
+  return true;
+}
+#endif
 
 void UITask::loop() {
 #ifdef PIN_USER_BTN

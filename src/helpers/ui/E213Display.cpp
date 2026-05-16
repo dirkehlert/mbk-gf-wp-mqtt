@@ -199,3 +199,34 @@ void E213Display::endFrame() {
     last_display_crc_value = crc;
   }
 }
+
+#ifdef ENABLE_DISPLAY_DUMP
+void E213Display::dumpPBM(Stream& out) {
+  if (!display || !display->page_black) {
+    out.println("ERR no framebuffer");
+    return;
+  }
+
+  out.println("BEGIN_SCREEN_PBM");
+  out.println("P1");
+  out.print(width());
+  out.print(' ');
+  out.println(height());
+
+  for (int y = 0; y < height(); y++) {
+    for (int x = 0; x < width(); x++) {
+      // E213Display uses rotation 3: logical 250x122 maps to panel 128x250.
+      uint16_t px = y;
+      uint16_t py = (uint16_t)(width() - 1 - x);
+      uint16_t byte_offset = py * (128 / 8) + px / 8;
+      uint8_t bit_offset = 7 - (px % 8);
+      bool white = (display->page_black[byte_offset] >> bit_offset) & 0x01;
+
+      out.print(white ? '0' : '1');
+      if (x + 1 < width()) out.print(' ');
+    }
+    out.println();
+  }
+  out.println("END_SCREEN_PBM");
+}
+#endif
