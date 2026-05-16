@@ -230,3 +230,27 @@ Letzter bekannter erfolgreicher Upload:
 Environment: Heltec_Wireless_Paper_mqtt_observer
 Status: SUCCESS
 ```
+
+## TODO Security Hardening
+
+- MQTT-Credentials fuer den Feldbetrieb rotieren und moeglichst pro Node eigene
+  User verwenden.
+- MQTT von Port 1883 auf TLS/8883 umstellen; Server-Zertifikat bzw. CA pruefen.
+- MQTT-ACL serverseitig eng setzen: Publish nur auf das eigene Topic, keine
+  Wildcards, kein Subscribe.
+- `ENABLE_PRIVATE_KEY_IMPORT` und `ENABLE_PRIVATE_KEY_EXPORT` fuer
+  Produktions-Builds deaktivieren.
+- `ADMIN_PASSWORD` nicht auf dem Default `password` lassen; lokales starkes
+  Passwort in `platformio.local.ini` oder unbenoetigte Admin-Funktionen im
+  Observer-Build deaktivieren.
+- Serial CLI haerten: gefaehrliche Befehle nur nach Unlock oder Button-Gate,
+  keine Secret-Ausgabe, optional Read-only-Modus nach normalem Boot.
+- Observer-Only-Regel hart absichern: MQTT/WLAN/Savepoint/UI-Fehler duerfen
+  niemals Mesh-TX ausloesen; Mesh-TX nur ueber explizite Whitelist erlauben.
+- OTA aus dem Observer-Build entfernen, falls nicht aktiv benoetigt.
+- Savepoint-Dateien weiter begrenzen und robust validieren; optional CRC pro
+  Savepoint speichern.
+- Build-Secrets nur in der ignorierten `platformio.local.ini` halten und nie
+  committen.
+- Dependencies moeglichst pinnen und Firmware-Releases mit Build-Hash
+  dokumentieren.
