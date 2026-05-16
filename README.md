@@ -1,120 +1,256 @@
-## About MeshCore
+# MBK GF WP MQTT
 
-MeshCore is a lightweight, portable C++ library that enables multi-hop packet routing for embedded projects using LoRa and other packet radios. It is designed for developers who want to create resilient, decentralized communication networks that work without the internet.
+Projekt-Spec fuer einen Heltec Wireless Paper Node als MeshCore MQTT Observer.
 
-## 🔍 What is MeshCore?
+## Ziel
 
-MeshCore now supports a range of LoRa devices, allowing for easy flashing without the need to compile firmware manually. Users can flash a pre-built binary using tools like Adafruit ESPTool and interact with the network through a serial console.
-MeshCore provides the ability to create wireless mesh networks, similar to Meshtastic and Reticulum but with a focus on lightweight multi-hop packet routing for embedded projects. Unlike Meshtastic, which is tailored for casual LoRa communication, or Reticulum, which offers advanced networking, MeshCore balances simplicity with scalability, making it ideal for custom embedded solutions., where devices (nodes) can communicate over long distances by relaying messages through intermediate nodes. This is especially useful in off-grid, emergency, or tactical situations where traditional communication infrastructure is unavailable.
+Das Heltec Wireless Paper laeuft als passiver MeshCore Observer fuer den Bereich
+Braunschweig/Gifhorn. Empfangene MeshCore Pakete werden ueber WLAN an den
+MQTT-Broker von meshcorenetz.de publiziert. Das Geraet ist im Mesh als
+`MBK GF WP MQTT` sichtbar.
 
-## ⚡ Key Features
+## Hardware
 
-* Multi-Hop Packet Routing
-  * Devices can forward messages across multiple nodes, extending range beyond a single radio's reach.
-  * Supports up to a configurable number of hops to balance network efficiency and prevent excessive traffic.
-  * Nodes use fixed roles where "Companion" nodes are not repeating messages at all to prevent adverse routing paths from being used.
-* Supports LoRa Radios – Works with Heltec, RAK Wireless, and other LoRa-based hardware.
-* Decentralized & Resilient – No central server or internet required; the network is self-healing.
-* Low Power Consumption – Ideal for battery-powered or solar-powered devices.
-* Simple to Deploy – Pre-built example applications make it easy to get started.
+- Board: Heltec Wireless Paper
+- MCU: ESP32-S3
+- Display: E-Ink, `E213Display`
+- Upload-Port: `/dev/cu.usbserial-0001`
+- Upload-Speed: `115200`
 
-## 🎯 What Can You Use MeshCore For?
+## PlatformIO Environment
 
-* Off-Grid Communication: Stay connected even in remote areas.
-* Emergency Response & Disaster Recovery: Set up instant networks where infrastructure is down.
-* Outdoor Activities: Hiking, camping, and adventure racing communication.
-* Tactical & Security Applications: Military, law enforcement, and private security use cases.
-* IoT & Sensor Networks: Collect data from remote sensors and relay it back to a central location.
+Build- und Upload-Environment:
 
-## 🚀 How to Get Started
+```sh
+/Users/dirkehlert/.platformio/penv/bin/pio run -e Heltec_Wireless_Paper_mqtt_observer
+/Users/dirkehlert/.platformio/penv/bin/pio run -e Heltec_Wireless_Paper_mqtt_observer -t upload --upload-port /dev/cu.usbserial-0001
+```
 
-- Watch the [MeshCore Intro Video](https://www.youtube.com/watch?v=t1qne8uJBAc) by Andy Kirby.
-- Watch the [MeshCore Technical Presentation](https://www.youtube.com/watch?v=OwmkVkZQTf4) by Liam Cottle.
-- Read through our [Frequently Asked Questions](./docs/faq.md) and [Documentation](https://docs.meshcore.io).
-- Flash the MeshCore firmware on a supported device.
-- Connect with a supported client.
+Die Konfiguration liegt in:
 
-For developers;
+```text
+variants/heltec_wireless_paper/platformio.ini
+```
 
-- Install [PlatformIO](https://docs.platformio.org) in [Visual Studio Code](https://code.visualstudio.com).
-- Clone and open the MeshCore repository in Visual Studio Code.
-- See the example applications you can modify and run:
-  - [Companion Radio](./examples/companion_radio) - For use with an external chat app, over BLE, USB or WiFi.
-  - [KISS Modem](./examples/kiss_modem) - Serial KISS protocol bridge for host applications. ([protocol docs](./docs/kiss_modem_protocol.md))
-  - [Simple Repeater](./examples/simple_repeater) - Extends network coverage by relaying messages.
-  - [Simple Room Server](./examples/simple_room_server) - A simple BBS server for shared Posts.
-  - [Simple Secure Chat](./examples/simple_secure_chat) - Secure terminal based text communication between devices.
-  - [Simple Sensor](./examples/simple_sensor) - Remote sensor node with telemetry and alerting.
+## Mesh-Konfiguration
 
-The Simple Secure Chat example can be interacted with through the Serial Monitor in Visual Studio Code, or with a Serial USB Terminal on Android.
+- Node Name: `MBK GF WP MQTT`
+- Position: `52.4770, 10.5419`
+- Standort: Deutschland, Gifhorn, Braunschweiger Strasse / Ecke Loenseck
+- Default Region/Scope: `bsmesh`
+- Node-Typ im Advert: Repeater
+- Forwarding: deaktiviert fuer Observer-Betrieb
+- Lokale Adverts: aktiv
+- Flood-Adverts: manuell per CLI oder Taste moeglich
 
-## ⚡️ MeshCore Flasher
+Wichtige CLI-Kommandos:
 
-We have prebuilt firmware ready to flash on supported devices.
+```text
+set lat 52.4770
+set lon 10.5419
+region default bsmesh
+advert.zerohop
+advert
+```
 
-- Launch https://meshcore.io/flasher
-- Select a supported device
-- Flash one of the firmware types:
-  - Companion, Repeater or Room Server
-- Once flashing is complete, you can connect with one of the MeshCore clients below.
+## WLAN
 
-## 📱 MeshCore Clients
+- SSID: lokal im Build als `MQTT_OBSERVER_WIFI_SSID` hinterlegt
+- Passwort: lokal im Build als `MQTT_OBSERVER_WIFI_PASSWORD` hinterlegt
 
-**Companion Firmware**
+## MQTT
 
-The companion firmware can be connected to via BLE, USB or WiFi depending on the firmware type you flashed.
+- Broker: `mqtt.meshcorenetz.de`
+- Port: `1883`
+- TLS: nein
+- Username: `observer`
+- Passwort: im Build als `MQTT_OBSERVER_PASSWORD` hinterlegt
+- Topic:
 
-- Web: https://app.meshcore.nz
-- Android: https://play.google.com/store/apps/details?id=com.liamcottle.meshcore.android
-- iOS: https://apps.apple.com/us/app/meshcore/id6742354151?platform=iphone
-- NodeJS: https://github.com/liamcottle/meshcore.js
-- Python: https://github.com/fdlamotte/meshcore-cli
+```text
+meshcore/BWE/{PUBLIC_KEY}/packets
+```
 
-**Repeater and Room Server Firmware**
+Der Platzhalter `{PUBLIC_KEY}` wird zur Laufzeit durch den Public Key des
+Geraets ersetzt.
 
-The repeater and room server firmwares can be setup via USB in the web config tool.
+Aktueller Public Key des Geraets:
 
-- https://config.meshcore.io
+```text
+A4F610572F1F4C77CC27483B9920C347B7070B9471C8B24C413324BED5146EA8
+```
 
-They can also be managed via LoRa in the mobile app by using the Remote Management feature.
+Effektives Topic:
 
-## 🛠 Hardware Compatibility
+```text
+meshcore/BWE/A4F610572F1F4C77CC27483B9920C347B7070B9471C8B24C413324BED5146EA8/packets
+```
 
-MeshCore is designed for devices listed in the [MeshCore Flasher](https://meshcore.io/flasher)
+## MQTT Payload
 
-## 📜 License
+Die Firmware publiziert derzeit kompakte JSON-Nachrichten:
 
-MeshCore is open-source software released under the MIT License. You are free to use, modify, and distribute it for personal and commercial projects.
+```json
+{
+  "type": "rx",
+  "pubkey": "...",
+  "packet": "...",
+  "payload_type": 1,
+  "route": 1,
+  "path_hash_size": 1,
+  "path_hash_count": 2,
+  "rssi": -80,
+  "snr": 28
+}
+```
 
-## Contributing
+`type` ist `rx` fuer empfangene Pakete und `tx` fuer gesendete Pakete.
 
-Please submit PR's using 'dev' as the base branch!
-For minor changes just submit your PR and we'll try to review it, but for anything more 'impactful' please open an Issue first and start a discussion. Is better to sound out what it is you want to achieve first, and try to come to a consensus on what the best approach is, especially when it impacts the structure or architecture of this codebase.
+Hinweis: Der MQTT-Broker-Eingang wurde erfolgreich getestet. Fuer die
+meshcorenetz.de Live-Ansicht kann ggf. noch eine Anpassung an deren
+erwartetes Payload-Format sinnvoll sein.
 
-Here are some general principals you should try to adhere to:
-* Keep it simple. Please, don't think like a high-level lang programmer. Think embedded, and keep code concise, without any unnecessary layers.
-* No dynamic memory allocation, except during setup/begin functions.
-* Use the same brace and indenting style that's in the core source modules. (A .clang-format is prob going to be added soon, but please do NOT retroactively re-format existing code. This just creates unnecessary diffs that make finding problems harder)
+## Display
 
-Help us prioritize! Please react with thumbs-up to issues/PRs you care about most. We look at reaction counts when planning work.
+Status-Screen:
 
-## Road-Map / To-Do
+- Node-Name in eigener Kopfzeile
+- zweite Kopfzeile mit SNR des letzten empfangenen Pakets, Noise Floor, freiem Heap und Batteriespannung
+- Frequenz, SF, Bandbreite und Coding Rate
+- MQTT-Status und Broker
+- RX/MQTT Pakete der laufenden Minute
+- Gesamtsummen seit Start
 
-There are a number of fairly major features in the pipeline, with no particular time-frames attached yet. In very rough chronological order:
-- [X] Companion radio: UI redesign
-- [X] Repeater + Room Server: add ACL's (like Sensor Node has)
-- [X] Standardise Bridge mode for repeaters
-- [ ] Repeater/Bridge: Standardise the Transport Codes for zoning/filtering
-- [X] Core + Repeater: enhanced zero-hop neighbour discovery
-- [ ] Core: round-trip manual path support
-- [ ] Companion + Apps: support for multiple sub-meshes (and 'off-grid' client repeat mode)
-- [ ] Core + Apps: support for LZW message compression
-- [ ] Core: dynamic CR (Coding Rate) for weak vs strong hops
-- [ ] Core: new framework for hosting multiple virtual nodes on one physical device
-- [ ] V2 protocol spec: discussion and consensus around V2 packet protocol, including path hashes, new encryption specs, etc
+Pfad-Screen:
 
-## 📞 Get Support
+- Pfade der in den letzten 60 Sekunden empfangenen Pakete
+- Neueste Pakete zuerst
+- Pfad-Hashes umgekehrt dargestellt, damit der naehere/lokale Teil links steht
+- Anzeige zeigt aus Platzgruenden die letzten 3 Hops, gezaehlt wird intern aber nach vollstaendigem Pfad
+- Pfadhistorie speichert bis zu 24 unterschiedliche Pfade
+- Rechts ein Aktivitaetsbalken fuer RX-Pakete der letzten 12 Minuten mit einem Balken pro Minute
 
-- Report bugs and request features on the [GitHub Issues](https://github.com/ripplebiz/MeshCore/issues) page.
-- Find additional guides and components on [my site](https://buymeacoffee.com/ripplebiz).
-- Join [MeshCore Discord](https://meshcore.gg) to chat with the developers and get help from the community.
+MQTT-Screen:
+
+- WLAN/MQTT ein/aus
+- MQTT-Verbindungsstatus und letzter MQTT-State-Code
+- letzter lokaler MQTT-Fehler
+- Zaehler fuer WLAN-, MQTT-Verbindungs- und Publish-Fehler
+
+Heards-Screen:
+
+- letzter/naechster Hop der empfangenen Pakete
+- Last Heard als Alter in Sekunden
+- maximale SNR seit Start fuer diesen Hop
+- letzte SNR fuer diesen Hop
+- rechts derselbe RX-Aktivitaetsbalken wie auf dem Pfad-Screen
+
+Savepoints-Screen:
+
+- zweite Zeile zeigt den Clock-Sync-Status
+- listet gespeicherte Savepoints mit ID, Uhrzeit, RX-Zaehler und Noise Floor
+- Doppelklick erzeugt einen neuen Savepoint im Flash
+- Long Press setzt Live-Zaehler, Pfade und Heards zurueck
+- Histogramme laufen beim Reset weiter und werden beim Savepoint mitgespeichert
+
+## Uhrzeit
+
+Der Node synchronisiert seine Uhr passiv aus validierten Mesh-Adverts. Dafuer
+werden nur plausible Sender-Zeitstempel akzeptiert. Nach 5 Samples aus
+mindestens 2 verschiedenen Nodes wird der Median als Mesh-Zeit uebernommen,
+sofern die lokale Uhr dadurch nur vorwaerts gesetzt wird. Es wird nichts ins
+Mesh gesendet.
+
+## Lokale Secrets
+
+WLAN- und MQTT-Passwoerter werden nicht versioniert. Fuer lokale Builds:
+
+```text
+cp platformio.local.example.ini platformio.local.ini
+```
+
+Danach die Werte in `platformio.local.ini` anpassen. Diese Datei ist in
+`.gitignore` eingetragen.
+
+## Tastenbedienung
+
+- Kurzer Klick: Status-Screen, Pfad-Screen, Heards-Screen, Savepoints-Screen und MQTT-Screen durchschalten
+- Doppelklick auf Pfad- oder Heards-Screen: direkt zwischen diesen beiden Screens wechseln
+- Doppelklick auf Savepoints-Screen: Savepoint speichern
+- Doppelklick auf anderen Screens: Zero-Hop Advert senden
+- Langer Druck auf Status-Screen: Flood-Advert senden
+- Langer Druck auf Pfad-Screen: Hibernate
+- Langer Druck auf Heards-Screen: Repeater-Discovery / Find Nearby Nodes senden
+- Langer Druck auf Savepoints-Screen: Live-Zaehler zuruecksetzen
+- Langer Druck auf MQTT-Screen: WLAN/MQTT toggeln
+
+## Savepoints
+
+Savepoints werden als CSV-Dateien im SPIFFS-Flash abgelegt. Maximal 10
+Savepoints werden gehalten; beim 11. Savepoint wird der aelteste geloescht.
+
+CLI-Kommandos:
+
+```text
+sp.list
+sp.show <id> [page]
+sp.delete <id>
+sp.clear
+```
+
+`sp.show <id>` gibt eine kompakte Zusammenfassung mit RX/MQTT, NF, SNR,
+Batterie sowie erstem Pfad und erstem Heard-Eintrag aus. `sp.show <id> <page>`
+gibt den Savepoint als rohe CSV-Seite aus. Die CSV-Ausgabe ist wegen der
+CLI-Antwortlaenge paginiert; jede Seite enthaelt bis zu 4 CSV-Zeilen.
+
+## MQTT Fehlerverhalten
+
+MQTT ist eine reine Observer-Nebenstrecke. MQTT-Fehler duerfen keine MeshCore
+Pakete, ACKs, Adverts oder sonstige Antworten ins Mesh ausloesen. Fehler werden
+nur lokal gezaehlt und auf dem MQTT-Screen angezeigt.
+
+Wenn kein WLAN verfuegbar ist, laeuft der MeshCore/LoRa-Empfang weiter. Pakete
+werden lokal gezaehlt, Pfade und Aktivitaet werden weiterhin angezeigt, nur der
+MQTT-Publish schlaegt lokal fehl und erhoeht die Fehlerzaehler.
+
+## Verifikation
+
+MQTT Subscribe-Test:
+
+```text
+Topic: meshcore/BWE/+/packets
+Broker: mqtt.meshcorenetz.de:1883
+```
+
+Dabei wurden Nachrichten vom Geraet unter dem Public-Key-Topic empfangen.
+
+Letzter bekannter erfolgreicher Upload:
+
+```text
+Environment: Heltec_Wireless_Paper_mqtt_observer
+Status: SUCCESS
+```
+
+## TODO Security Hardening
+
+- MQTT-Credentials fuer den Feldbetrieb rotieren und moeglichst pro Node eigene
+  User verwenden.
+- MQTT von Port 1883 auf TLS/8883 umstellen; Server-Zertifikat bzw. CA pruefen.
+- MQTT-ACL serverseitig eng setzen: Publish nur auf das eigene Topic, keine
+  Wildcards, kein Subscribe.
+- `ENABLE_PRIVATE_KEY_IMPORT` und `ENABLE_PRIVATE_KEY_EXPORT` fuer
+  Produktions-Builds deaktivieren.
+- `ADMIN_PASSWORD` nicht auf dem Default `password` lassen; lokales starkes
+  Passwort in `platformio.local.ini` oder unbenoetigte Admin-Funktionen im
+  Observer-Build deaktivieren.
+- Serial CLI haerten: gefaehrliche Befehle nur nach Unlock oder Button-Gate,
+  keine Secret-Ausgabe, optional Read-only-Modus nach normalem Boot.
+- Observer-Only-Regel hart absichern: MQTT/WLAN/Savepoint/UI-Fehler duerfen
+  niemals Mesh-TX ausloesen; Mesh-TX nur ueber explizite Whitelist erlauben.
+- OTA aus dem Observer-Build entfernen, falls nicht aktiv benoetigt.
+- Savepoint-Dateien weiter begrenzen und robust validieren; optional CRC pro
+  Savepoint speichern.
+- Build-Secrets nur in der ignorierten `platformio.local.ini` halten und nie
+  committen.
+- Dependencies moeglichst pinnen und Firmware-Releases mit Build-Hash
+  dokumentieren.
