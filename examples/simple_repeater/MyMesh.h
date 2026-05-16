@@ -33,6 +33,9 @@
 #include <helpers/StatsFormatHelper.h>
 #include <helpers/TxtDataHelpers.h>
 #include <helpers/RegionMap.h>
+#ifdef WITH_MQTT_OBSERVER
+#include <helpers/MQTTObserver.h>
+#endif
 #include "RateLimiter.h"
 
 #ifdef WITH_BRIDGE
@@ -66,6 +69,39 @@ struct NeighbourInfo {
   uint32_t advert_timestamp;
   uint32_t heard_timestamp;
   int8_t snr; // multiplied by 4, user should divide to get float value
+};
+
+#define OBSERVER_PATH_HISTORY_SIZE 24
+#define OBSERVER_PATH_TEXT_SIZE    36
+#define OBSERVER_PATH_KEY_SIZE     (MAX_PATH_SIZE * 2 + 4)
+#define OBSERVER_PATH_DISPLAY_HOPS 3
+#define OBSERVER_LAST_HOP_HISTORY_SIZE 24
+#define OBSERVER_LAST_HOP_TEXT_SIZE    8
+#define OBSERVER_SAVEPOINT_MAX         10
+#define OBSERVER_SAVEPOINT_LINE_SIZE   40
+#define OBSERVER_CLOCK_SYNC_SAMPLES    8
+#define OBSERVER_CLOCK_SYNC_REQUIRED   5
+#define OBSERVER_CLOCK_SYNC_DISTINCT   2
+
+struct ObserverPathInfo {
+  unsigned long seen_at;
+  uint16_t count;
+  char text[OBSERVER_PATH_TEXT_SIZE];
+  char key[OBSERVER_PATH_KEY_SIZE];
+};
+
+struct ObserverLastHopInfo {
+  unsigned long seen_at;
+  int8_t last_snr;
+  int8_t max_snr;
+  char text[OBSERVER_LAST_HOP_TEXT_SIZE];
+  char key[OBSERVER_LAST_HOP_TEXT_SIZE];
+};
+
+struct ObserverClockSyncSample {
+  bool used;
+  uint32_t timestamp;
+  uint8_t pub_key[PUB_KEY_SIZE];
 };
 
 #ifndef FIRMWARE_BUILD_DATE
@@ -113,10 +149,25 @@ class MyMesh : public mesh::Mesh, public CommonCLICallbacks {
   uint8_t pending_sf;
   uint8_t pending_cr;
   int  matching_peer_indexes[MAX_CLIENTS];
+  uint32_t observer_rx_packets;
+  uint32_t observer_mqtt_published;
+  mesh::MainBoard* _board;
+  ObserverPathInfo observer_paths[OBSERVER_PATH_HISTORY_SIZE];
+  ObserverLastHopInfo observer_last_hops[OBSERVER_LAST_HOP_HISTORY_SIZE];
+  ObserverClockSyncSample observer_clock_sync_samples[OBSERVER_CLOCK_SYNC_SAMPLES];
+  uint8_t observer_path_next;
+  uint8_t observer_clock_sync_next;
+  uint8_t observer_clock_sync_count;
+  bool observer_clock_synced;
+  bool observer_clock_sync_done;
+  uint32_t observer_clock_synced_at;
 #if defined(WITH_RS232_BRIDGE)
   RS232Bridge bridge;
 #elif defined(WITH_ESPNOW_BRIDGE)
   ESPNowBridge bridge;
+#endif
+#ifdef WITH_MQTT_OBSERVER
+  MQTTObserver mqtt_observer;
 #endif
 
   void putNeighbour(const mesh::Identity& id, uint32_t timestamp, float snr);
@@ -129,6 +180,9 @@ class MyMesh : public mesh::Mesh, public CommonCLICallbacks {
 
   File openAppend(const char* fname);
   bool isLooped(const mesh::Packet* packet, const uint8_t max_counters[]);
+  void rememberObserverPath(const mesh::Packet* packet);
+  void rememberObserverLastHop(const mesh::Packet* packet, int8_t snr_x4);
+  void observeClockSyncSample(const mesh::Identity& id, uint32_t timestamp);
 
 protected:
   float getAirtimeBudgetFactor() const override {
@@ -187,6 +241,30 @@ public:
   NodePrefs* getNodePrefs() {
     return &_prefs;
   }
+  uint32_t getObserverRxPackets() const { return observer_rx_packets; }
+  uint32_t getObserverMqttPublished() const { return observer_mqtt_published; }
+  const char* getObserverMqttHost() const { return _prefs.mqtt_host; }
+  uint16_t getObserverMqttPort() const { return _prefs.mqtt_port; }
+  const char* getObserverMqttStatus();
+  bool isObserverMqttEnabled() const { return _prefs.mqtt_enabled; }
+  const char* getObserverMqttLastError() const;
+  uint32_t getObserverMqttPublishFailures() const;
+  uint32_t getObserverMqttWifiFailures() const;
+  uint32_t getObserverMqttConnectFailures() const;
+  int getObserverMqttState() const;
+  void setObserverMqttEnabled(bool enabled);
+  bool toggleObserverMqttEnabled();
+  uint16_t getObserverBattMilliVolts() const { return _board ? _board->getBattMilliVolts() : 0; }
+  int getObserverNoiseFloor() const { return _radio ? _radio->getNoiseFloor() : 0; }
+  float getObserverLastSnr() const { return _radio ? _radio->getLastSNR() : 0.0f; }
+  bool getObserverPathLine(uint8_t index, char* dest, size_t dest_size) const;
+  bool getObserverLatestPathLine(char* dest, size_t dest_size) const;
+  bool getObserverLastHopLine(uint8_t index, char* dest, size_t dest_size) const;
+  bool getObserverSavepointLine(uint8_t index, char* dest, size_t dest_size) const;
+  void getObserverClockSyncStatus(char* dest, size_t dest_size) const;
+  bool createObserverSavepoint(const uint16_t* activity_bins, uint8_t bin_count, uint8_t newest_bin, char* status, size_t status_size);
+  void resetObserverLiveStats();
+  void hibernate();
 
   void savePrefs() override {
     _cli.savePrefs(_fs);
@@ -243,6 +321,23 @@ public:
     if (!bridge.isRunning()) return;
     bridge.end();
     bridge.begin();
+  }
+#endif
+
+#ifdef WITH_MQTT_OBSERVER
+  void setMqttObserverState(bool enable) override {
+    if (enable == mqtt_observer.isRunning()) return;
+    if (enable) {
+      mqtt_observer.begin();
+    } else {
+      mqtt_observer.end();
+    }
+  }
+
+  void restartMqttObserver() override {
+    if (!mqtt_observer.isRunning()) return;
+    mqtt_observer.end();
+    mqtt_observer.begin();
   }
 #endif
 

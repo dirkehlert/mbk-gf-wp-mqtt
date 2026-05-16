@@ -1,5 +1,9 @@
 #include "MyMesh.h"
 #include <algorithm>
+#if defined(ESP32)
+#include <esp_sleep.h>
+#include <driver/rtc_io.h>
+#endif
 
 /* ------------------------------ Config -------------------------------- */
 
@@ -33,6 +37,34 @@
   #define ADMIN_PASSWORD "password"
 #endif
 
+#ifndef MQTT_OBSERVER_ENABLED
+  #define MQTT_OBSERVER_ENABLED 0
+#endif
+#ifndef MQTT_OBSERVER_TLS
+  #define MQTT_OBSERVER_TLS 1
+#endif
+#ifndef MQTT_OBSERVER_PORT
+  #define MQTT_OBSERVER_PORT 8883
+#endif
+#ifndef MQTT_OBSERVER_HOST
+  #define MQTT_OBSERVER_HOST ""
+#endif
+#ifndef MQTT_OBSERVER_USERNAME
+  #define MQTT_OBSERVER_USERNAME ""
+#endif
+#ifndef MQTT_OBSERVER_PASSWORD
+  #define MQTT_OBSERVER_PASSWORD ""
+#endif
+#ifndef MQTT_OBSERVER_TOPIC
+  #define MQTT_OBSERVER_TOPIC "meshcore/observer"
+#endif
+#ifndef MQTT_OBSERVER_WIFI_SSID
+  #define MQTT_OBSERVER_WIFI_SSID ""
+#endif
+#ifndef MQTT_OBSERVER_WIFI_PASSWORD
+  #define MQTT_OBSERVER_WIFI_PASSWORD ""
+#endif
+
 #ifndef SERVER_RESPONSE_DELAY
   #define SERVER_RESPONSE_DELAY 300
 #endif
@@ -42,6 +74,11 @@
 #endif
 
 #define FIRMWARE_VER_LEVEL       2
+
+#define SAVEPOINT_INDEX_FILE     "/sp_index.csv"
+
+#define CLOCK_SYNC_MIN_TIME      1735689600UL  // 2025-01-01T00:00:00Z
+#define CLOCK_SYNC_MAX_TIME      2051222400UL  // 2035-01-01T00:00:00Z
 
 #define REQ_TYPE_GET_STATUS         0x01 // same as _GET_STATS
 #define REQ_TYPE_KEEP_ALIVE         0x02
@@ -469,9 +506,20 @@ void MyMesh::logRxRaw(float snr, float rssi, const uint8_t raw[], int len) {
 }
 
 void MyMesh::logRx(mesh::Packet *pkt, int len, float score) {
+  observer_rx_packets++;
+  int snr_x4 = (int)(_radio->getLastSNR() * 4);
+  if (snr_x4 > 127) snr_x4 = 127;
+  if (snr_x4 < -128) snr_x4 = -128;
+  rememberObserverPath(pkt);
+  rememberObserverLastHop(pkt, (int8_t)snr_x4);
 #ifdef WITH_BRIDGE
   if (_prefs.bridge_pkt_src == 1) {
     bridge.sendPacket(pkt);
+  }
+#endif
+#ifdef WITH_MQTT_OBSERVER
+  if (mqtt_observer.sendPacket(pkt, true, (int)_radio->getLastRSSI(), snr_x4)) {
+    observer_mqtt_published++;
   }
 #endif
 
@@ -494,11 +542,59 @@ void MyMesh::logRx(mesh::Packet *pkt, int len, float score) {
   }
 }
 
+void MyMesh::observeClockSyncSample(const mesh::Identity& id, uint32_t timestamp) {
+  if (observer_clock_sync_done) return;
+  if (timestamp < CLOCK_SYNC_MIN_TIME || timestamp > CLOCK_SYNC_MAX_TIME) return;
+
+  ObserverClockSyncSample& slot = observer_clock_sync_samples[observer_clock_sync_next];
+  slot.used = true;
+  slot.timestamp = timestamp;
+  memcpy(slot.pub_key, id.pub_key, PUB_KEY_SIZE);
+  observer_clock_sync_next = (observer_clock_sync_next + 1) % OBSERVER_CLOCK_SYNC_SAMPLES;
+  if (observer_clock_sync_count < OBSERVER_CLOCK_SYNC_SAMPLES) observer_clock_sync_count++;
+
+  if (observer_clock_sync_count < OBSERVER_CLOCK_SYNC_REQUIRED) return;
+
+  uint8_t distinct = 0;
+  uint32_t values[OBSERVER_CLOCK_SYNC_SAMPLES];
+  uint8_t value_count = 0;
+
+  for (uint8_t i = 0; i < OBSERVER_CLOCK_SYNC_SAMPLES; i++) {
+    if (!observer_clock_sync_samples[i].used) continue;
+    values[value_count++] = observer_clock_sync_samples[i].timestamp;
+
+    bool seen = false;
+    for (uint8_t j = 0; j < i; j++) {
+      if (!observer_clock_sync_samples[j].used) continue;
+      if (memcmp(observer_clock_sync_samples[i].pub_key, observer_clock_sync_samples[j].pub_key, PUB_KEY_SIZE) == 0) {
+        seen = true;
+        break;
+      }
+    }
+    if (!seen) distinct++;
+  }
+
+  if (value_count < OBSERVER_CLOCK_SYNC_REQUIRED || distinct < OBSERVER_CLOCK_SYNC_DISTINCT) return;
+
+  std::sort(values, values + value_count);
+  uint32_t candidate = values[value_count / 2] + 1;
+  uint32_t current = getRTCClock()->getCurrentTime();
+  if (candidate > current + 60) {
+    getRTCClock()->setCurrentTime(candidate);
+    observer_clock_synced_at = candidate;
+    observer_clock_synced = true;
+  }
+  observer_clock_sync_done = true;
+}
+
 void MyMesh::logTx(mesh::Packet *pkt, int len) {
 #ifdef WITH_BRIDGE
   if (_prefs.bridge_pkt_src == 0) {
     bridge.sendPacket(pkt);
   }
+#endif
+#ifdef WITH_MQTT_OBSERVER
+  mqtt_observer.sendPacket(pkt, false, 0, (int)(pkt->getSNR() * 4));
 #endif
 
   if (_logging) {
@@ -633,6 +729,7 @@ static bool isShare(const mesh::Packet *packet) {
 void MyMesh::onAdvertRecv(mesh::Packet *packet, const mesh::Identity &id, uint32_t timestamp,
                           const uint8_t *app_data, size_t app_data_len) {
   mesh::Mesh::onAdvertRecv(packet, id, timestamp, app_data, app_data_len); // chain to super impl
+  observeClockSyncSample(id, timestamp);
 
   // if this a zero hop advert (and not via 'Share'), add it to neighbours
   if (packet->path_len == 0 && !isShare(packet)) {
@@ -855,12 +952,27 @@ MyMesh::MyMesh(mesh::MainBoard &board, mesh::Radio &radio, mesh::MillisecondCloc
 #if defined(WITH_ESPNOW_BRIDGE)
       , bridge(&_prefs, _mgr, &rtc)
 #endif
+#if defined(WITH_MQTT_OBSERVER)
+      , mqtt_observer(&_prefs, &self_id)
+#endif
 {
+  _board = &board;
   last_millis = 0;
   uptime_millis = 0;
   next_local_advert = next_flood_advert = 0;
   dirty_contacts_expiry = 0;
   set_radio_at = revert_radio_at = 0;
+  observer_rx_packets = 0;
+  observer_mqtt_published = 0;
+  observer_path_next = 0;
+  observer_clock_sync_next = 0;
+  observer_clock_sync_count = 0;
+  observer_clock_synced = false;
+  observer_clock_sync_done = false;
+  observer_clock_synced_at = 0;
+  memset(observer_paths, 0, sizeof(observer_paths));
+  memset(observer_last_hops, 0, sizeof(observer_last_hops));
+  memset(observer_clock_sync_samples, 0, sizeof(observer_clock_sync_samples));
   _logging = false;
   region_load_active = false;
 
@@ -896,6 +1008,19 @@ MyMesh::MyMesh(mesh::MainBoard &board, mesh::Radio &radio, mesh::MillisecondCloc
   _prefs.bridge_channel = 1;    // channel 1
 
   StrHelper::strncpy(_prefs.bridge_secret, "LVSITANOS", sizeof(_prefs.bridge_secret));
+
+#ifdef WITH_MQTT_OBSERVER
+  _prefs.disable_fwd = 1;
+  _prefs.mqtt_enabled = MQTT_OBSERVER_ENABLED;
+  _prefs.mqtt_tls = MQTT_OBSERVER_TLS;
+  _prefs.mqtt_port = MQTT_OBSERVER_PORT;
+  StrHelper::strncpy(_prefs.wifi_ssid, MQTT_OBSERVER_WIFI_SSID, sizeof(_prefs.wifi_ssid));
+  StrHelper::strncpy(_prefs.wifi_password, MQTT_OBSERVER_WIFI_PASSWORD, sizeof(_prefs.wifi_password));
+  StrHelper::strncpy(_prefs.mqtt_host, MQTT_OBSERVER_HOST, sizeof(_prefs.mqtt_host));
+  StrHelper::strncpy(_prefs.mqtt_username, MQTT_OBSERVER_USERNAME, sizeof(_prefs.mqtt_username));
+  StrHelper::strncpy(_prefs.mqtt_password, MQTT_OBSERVER_PASSWORD, sizeof(_prefs.mqtt_password));
+  StrHelper::strncpy(_prefs.mqtt_topic, MQTT_OBSERVER_TOPIC, sizeof(_prefs.mqtt_topic));
+#endif
 
   // GPS defaults
   _prefs.gps_enabled = 0;
@@ -953,6 +1078,12 @@ void MyMesh::begin(FILESYSTEM *fs) {
   }
 #endif
 
+#if defined(WITH_MQTT_OBSERVER)
+  if (_prefs.mqtt_enabled) {
+    mqtt_observer.begin();
+  }
+#endif
+
   radio_set_params(_prefs.freq, _prefs.bw, _prefs.sf, _prefs.cr);
   radio_set_tx_power(_prefs.tx_power_dbm);
 
@@ -979,6 +1110,587 @@ void MyMesh::sendFloodScoped(const TransportKey& scope, mesh::Packet* pkt, uint3
     codes[1] = 0;  // REVISIT: set to 'home' Region, for sender/return region?
     sendFlood(pkt, codes, delay_millis, path_hash_size);
   }
+}
+
+const char* MyMesh::getObserverMqttStatus() {
+#ifdef WITH_MQTT_OBSERVER
+  if (!_prefs.mqtt_enabled) return "off";
+  if (!mqtt_observer.isRunning()) return "stopped";
+  if (!mqtt_observer.isWifiConnected()) return "wifi...";
+  if (!mqtt_observer.isMqttConnected()) return "mqtt...";
+  return "ok";
+#else
+  return "n/a";
+#endif
+}
+
+const char* MyMesh::getObserverMqttLastError() const {
+#ifdef WITH_MQTT_OBSERVER
+  const char* err = mqtt_observer.lastError();
+  return err && err[0] ? err : "none";
+#else
+  return "n/a";
+#endif
+}
+
+uint32_t MyMesh::getObserverMqttPublishFailures() const {
+#ifdef WITH_MQTT_OBSERVER
+  return mqtt_observer.publishFailures();
+#else
+  return 0;
+#endif
+}
+
+uint32_t MyMesh::getObserverMqttWifiFailures() const {
+#ifdef WITH_MQTT_OBSERVER
+  return mqtt_observer.wifiFailures();
+#else
+  return 0;
+#endif
+}
+
+uint32_t MyMesh::getObserverMqttConnectFailures() const {
+#ifdef WITH_MQTT_OBSERVER
+  return mqtt_observer.mqttFailures();
+#else
+  return 0;
+#endif
+}
+
+int MyMesh::getObserverMqttState() const {
+#ifdef WITH_MQTT_OBSERVER
+  return mqtt_observer.lastMqttState();
+#else
+  return 0;
+#endif
+}
+
+void MyMesh::setObserverMqttEnabled(bool enabled) {
+#ifdef WITH_MQTT_OBSERVER
+  if (_prefs.mqtt_enabled == enabled && mqtt_observer.isRunning() == enabled) return;
+  _prefs.mqtt_enabled = enabled ? 1 : 0;
+  _cli.savePrefs(_fs);
+  if (enabled) {
+    mqtt_observer.begin();
+  } else {
+    mqtt_observer.end();
+  }
+#endif
+}
+
+bool MyMesh::toggleObserverMqttEnabled() {
+  bool enabled = !_prefs.mqtt_enabled;
+  setObserverMqttEnabled(enabled);
+  return enabled;
+}
+
+void MyMesh::rememberObserverPath(const mesh::Packet* packet) {
+  uint8_t hash_size = packet->getPathHashSize();
+  uint8_t hash_count = packet->getPathHashCount();
+  uint8_t display_hops = min((uint8_t)OBSERVER_PATH_DISPLAY_HOPS, hash_count);
+  char text[OBSERVER_PATH_TEXT_SIZE];
+  char key[OBSERVER_PATH_KEY_SIZE];
+  int written = snprintf(text, sizeof(text), "%u ", (unsigned int)hash_count);
+  int key_written = snprintf(key, sizeof(key), "%u:", (unsigned int)hash_size);
+  size_t key_pos = key_written > 0 ? (size_t)key_written : 0;
+  if (written < 0) {
+    text[0] = 0;
+  } else if (hash_count == 0) {
+    snprintf(&text[written], sizeof(text) - written, "-");
+  } else {
+    size_t pos = (size_t)written;
+    const char* hex = "0123456789ABCDEF";
+    for (uint8_t n = 0; n < display_hops && pos + 2 < sizeof(text); n++) {
+      uint8_t i = hash_count - n;
+      if (n > 0 && pos + 1 < sizeof(text)) text[pos++] = ' ';
+      const uint8_t* hash = &packet->path[(i - 1) * hash_size];
+      for (uint8_t j = 0; j < hash_size && pos + 2 < sizeof(text); j++) {
+        text[pos++] = hex[hash[j] >> 4];
+        text[pos++] = hex[hash[j] & 0x0F];
+      }
+    }
+    if (hash_count > display_hops && pos + 2 < sizeof(text)) {
+      text[pos++] = ' ';
+      text[pos++] = '+';
+    }
+    text[pos] = 0;
+  }
+
+  const char* hex = "0123456789ABCDEF";
+  uint16_t path_bytes = min((uint16_t)(hash_count * hash_size), (uint16_t)MAX_PATH_SIZE);
+  for (uint16_t i = 0; i < path_bytes && key_pos + 2 < sizeof(key); i++) {
+    key[key_pos++] = hex[packet->path[i] >> 4];
+    key[key_pos++] = hex[packet->path[i] & 0x0F];
+  }
+  key[key_pos] = 0;
+
+  unsigned long now = millis();
+  for (uint8_t i = 0; i < OBSERVER_PATH_HISTORY_SIZE; i++) {
+    ObserverPathInfo& existing = observer_paths[i];
+    if (existing.seen_at == 0) continue;
+    if (strcmp(existing.key, key) == 0) {
+      existing.seen_at = now;
+      if (existing.count < 0xFFFF) existing.count++;
+      return;
+    }
+  }
+
+  int slot = -1;
+  unsigned long oldest_seen = 0xFFFFFFFF;
+  uint16_t lowest_count = 0xFFFF;
+  for (uint8_t i = 0; i < OBSERVER_PATH_HISTORY_SIZE; i++) {
+    ObserverPathInfo& item = observer_paths[i];
+    if (item.seen_at == 0) {
+      slot = i;
+      break;
+    }
+    if (item.count < lowest_count || (item.count == lowest_count && item.seen_at < oldest_seen)) {
+      slot = i;
+      lowest_count = item.count;
+      oldest_seen = item.seen_at;
+    }
+  }
+
+  ObserverPathInfo& item = observer_paths[slot >= 0 ? slot : 0];
+  item.seen_at = now;
+  item.count = 1;
+  StrHelper::strncpy(item.text, text, sizeof(item.text));
+  StrHelper::strncpy(item.key, key, sizeof(item.key));
+}
+
+static void formatSnrX4(char* dest, size_t dest_size, int8_t snr_x4) {
+  int value = snr_x4;
+  int abs_value = abs(value);
+  int whole = abs_value / 4;
+  int frac = (abs_value % 4) * 25;
+  snprintf(dest, dest_size, "%s%d.%02d", value < 0 ? "-" : "", whole, frac);
+}
+
+static void formatAge(char* dest, size_t dest_size, unsigned long age_secs) {
+  if (age_secs <= 180) {
+    snprintf(dest, dest_size, "%lus", age_secs);
+  } else {
+    unsigned long age_mins = age_secs / 60;
+    if (age_mins > 999) {
+      snprintf(dest, dest_size, ">999");
+    } else {
+      snprintf(dest, dest_size, "%lum", age_mins);
+    }
+  }
+}
+
+static void formatSavepointFilename(char* dest, size_t dest_size, uint16_t id) {
+  snprintf(dest, dest_size, "/sp%04u.csv", (unsigned int)id);
+}
+
+static bool readLine(File& file, char* dest, size_t dest_size) {
+  if (!dest || dest_size == 0 || !file.available()) return false;
+  size_t pos = 0;
+  while (file.available()) {
+    int c = file.read();
+    if (c < 0) break;
+    if (c == '\r') continue;
+    if (c == '\n') break;
+    if (pos + 1 < dest_size) dest[pos++] = (char)c;
+  }
+  dest[pos] = 0;
+  return pos > 0 || file.available();
+}
+
+bool MyMesh::getObserverPathLine(uint8_t index, char* dest, size_t dest_size) const {
+  if (!dest || dest_size == 0) return false;
+  dest[0] = 0;
+
+  uint8_t found = 0;
+  unsigned long now = millis();
+  bool selected[OBSERVER_PATH_HISTORY_SIZE];
+  memset(selected, 0, sizeof(selected));
+
+  for (uint8_t i = 0; i < OBSERVER_PATH_HISTORY_SIZE; i++) {
+    int best = -1;
+    uint16_t best_count = 0;
+    unsigned long best_seen = 0;
+
+    for (uint8_t j = 0; j < OBSERVER_PATH_HISTORY_SIZE; j++) {
+      const ObserverPathInfo& item = observer_paths[j];
+      if (item.seen_at == 0) continue;
+      if (selected[j]) continue;
+
+      if (item.count > best_count || (item.count == best_count && item.seen_at > best_seen)) {
+        best = j;
+        best_count = item.count;
+        best_seen = item.seen_at;
+      }
+    }
+
+    if (best < 0) {
+      return false;
+    }
+
+    selected[best] = true;
+    if (found == index) {
+      const ObserverPathInfo& item = observer_paths[best];
+      char count_col[6];
+      char age_col[5];
+      unsigned long age_secs = (now - item.seen_at) / 1000;
+      if (item.count > 999) {
+        snprintf(count_col, sizeof(count_col), "999+");
+      } else {
+        snprintf(count_col, sizeof(count_col), "%u", (unsigned int)item.count);
+      }
+      formatAge(age_col, sizeof(age_col), age_secs);
+      snprintf(dest, dest_size, "%-5s %-4s %s", count_col, age_col, item.text);
+      return true;
+    }
+    found++;
+  }
+  return false;
+}
+
+bool MyMesh::getObserverLatestPathLine(char* dest, size_t dest_size) const {
+  if (!dest || dest_size == 0) return false;
+  dest[0] = 0;
+
+  int best = -1;
+  unsigned long best_seen = 0;
+  for (uint8_t i = 0; i < OBSERVER_PATH_HISTORY_SIZE; i++) {
+    const ObserverPathInfo& item = observer_paths[i];
+    if (item.seen_at == 0) continue;
+    if (item.seen_at > best_seen) {
+      best = i;
+      best_seen = item.seen_at;
+    }
+  }
+
+  if (best < 0) return false;
+
+  const ObserverPathInfo& item = observer_paths[best];
+  char age_col[5];
+  unsigned long age_secs = (millis() - item.seen_at) / 1000;
+  formatAge(age_col, sizeof(age_col), age_secs);
+  snprintf(dest, dest_size, "%s %s", age_col, item.text);
+  return true;
+}
+
+void MyMesh::rememberObserverLastHop(const mesh::Packet* packet, int8_t snr_x4) {
+  uint8_t hash_size = packet->getPathHashSize();
+  uint8_t hash_count = packet->getPathHashCount();
+  char text[OBSERVER_LAST_HOP_TEXT_SIZE];
+  char key[OBSERVER_LAST_HOP_TEXT_SIZE];
+  const char* hex = "0123456789ABCDEF";
+  size_t pos = 0;
+
+  if (hash_count == 0) {
+    StrHelper::strncpy(text, "-", sizeof(text));
+    StrHelper::strncpy(key, "0:-", sizeof(key));
+  } else {
+    const uint8_t* hash = &packet->path[(hash_count - 1) * hash_size];
+    for (uint8_t i = 0; i < hash_size && pos + 2 < sizeof(text); i++) {
+      text[pos++] = hex[hash[i] >> 4];
+      text[pos++] = hex[hash[i] & 0x0F];
+    }
+    text[pos] = 0;
+    snprintf(key, sizeof(key), "%u:%s", (unsigned int)hash_size, text);
+  }
+
+  unsigned long now = millis();
+  for (uint8_t i = 0; i < OBSERVER_LAST_HOP_HISTORY_SIZE; i++) {
+    ObserverLastHopInfo& item = observer_last_hops[i];
+    if (item.seen_at == 0) continue;
+    if (strcmp(item.key, key) == 0) {
+      item.seen_at = now;
+      item.last_snr = snr_x4;
+      if (snr_x4 > item.max_snr) item.max_snr = snr_x4;
+      return;
+    }
+  }
+
+  int slot = -1;
+  unsigned long oldest_seen = 0xFFFFFFFF;
+  for (uint8_t i = 0; i < OBSERVER_LAST_HOP_HISTORY_SIZE; i++) {
+    ObserverLastHopInfo& item = observer_last_hops[i];
+    if (item.seen_at == 0) {
+      slot = i;
+      break;
+    }
+    if (item.seen_at < oldest_seen) {
+      slot = i;
+      oldest_seen = item.seen_at;
+    }
+  }
+
+  ObserverLastHopInfo& item = observer_last_hops[slot >= 0 ? slot : 0];
+  item.seen_at = now;
+  item.last_snr = snr_x4;
+  item.max_snr = snr_x4;
+  StrHelper::strncpy(item.text, text, sizeof(item.text));
+  StrHelper::strncpy(item.key, key, sizeof(item.key));
+}
+
+bool MyMesh::getObserverLastHopLine(uint8_t index, char* dest, size_t dest_size) const {
+  if (!dest || dest_size == 0) return false;
+  dest[0] = 0;
+
+  uint8_t found = 0;
+  unsigned long now = millis();
+  bool selected[OBSERVER_LAST_HOP_HISTORY_SIZE];
+  memset(selected, 0, sizeof(selected));
+
+  for (uint8_t i = 0; i < OBSERVER_LAST_HOP_HISTORY_SIZE; i++) {
+    int best = -1;
+    unsigned long best_seen = 0;
+
+    for (uint8_t j = 0; j < OBSERVER_LAST_HOP_HISTORY_SIZE; j++) {
+      const ObserverLastHopInfo& item = observer_last_hops[j];
+      if (item.seen_at == 0) continue;
+      if (selected[j]) continue;
+
+      if (item.seen_at > best_seen) {
+        best = j;
+        best_seen = item.seen_at;
+      }
+    }
+
+    if (best < 0) return false;
+
+    selected[best] = true;
+    if (found == index) {
+      const ObserverLastHopInfo& item = observer_last_hops[best];
+      char age_col[5];
+      char max_col[8];
+      char last_col[8];
+      unsigned long age_secs = (now - item.seen_at) / 1000;
+      formatAge(age_col, sizeof(age_col), age_secs);
+      formatSnrX4(max_col, sizeof(max_col), item.max_snr);
+      formatSnrX4(last_col, sizeof(last_col), item.last_snr);
+      snprintf(dest, dest_size, "%-6s %-4s %6s %6s", item.text, age_col, max_col, last_col);
+      return true;
+    }
+    found++;
+  }
+  return false;
+}
+
+bool MyMesh::getObserverSavepointLine(uint8_t index, char* dest, size_t dest_size) const {
+  if (!dest || dest_size == 0 || !_fs) return false;
+  dest[0] = 0;
+
+  File file = _fs->open(SAVEPOINT_INDEX_FILE);
+  if (!file) return false;
+
+  char line[OBSERVER_SAVEPOINT_LINE_SIZE];
+  uint8_t found = 0;
+  while (readLine(file, line, sizeof(line))) {
+    if (line[0] == 0) continue;
+    if (found == index) {
+      unsigned int id = 0;
+      unsigned long ts = 0;
+      unsigned long rx = 0;
+      int nf = 0;
+      if (sscanf(line, "%u,%lu,%lu,%d", &id, &ts, &rx, &nf) == 4) {
+        DateTime dt((uint32_t)ts);
+        snprintf(dest, dest_size, "%04u %02d:%02d RX:%lu NF:%d",
+                 id, dt.hour(), dt.minute(), rx, nf);
+      } else {
+        StrHelper::strncpy(dest, line, dest_size);
+      }
+      file.close();
+      return true;
+    }
+    found++;
+  }
+
+  file.close();
+  return false;
+}
+
+void MyMesh::getObserverClockSyncStatus(char* dest, size_t dest_size) const {
+  if (!dest || dest_size == 0) return;
+  uint32_t current = getRTCClock()->getCurrentTime();
+  DateTime now_dt(current);
+
+  if (observer_clock_synced) {
+    DateTime dt(observer_clock_synced_at);
+    snprintf(dest, dest_size, "CLK %02d:%02d UTC mesh %02d:%02d",
+             now_dt.hour(), now_dt.minute(), dt.hour(), dt.minute());
+    return;
+  }
+
+  if (current >= CLOCK_SYNC_MIN_TIME) {
+    snprintf(dest, dest_size, "CLK %02d:%02d UTC set", now_dt.hour(), now_dt.minute());
+    return;
+  }
+
+  uint8_t distinct = 0;
+  for (uint8_t i = 0; i < OBSERVER_CLOCK_SYNC_SAMPLES; i++) {
+    if (!observer_clock_sync_samples[i].used) continue;
+    bool seen = false;
+    for (uint8_t j = 0; j < i; j++) {
+      if (!observer_clock_sync_samples[j].used) continue;
+      if (memcmp(observer_clock_sync_samples[i].pub_key, observer_clock_sync_samples[j].pub_key, PUB_KEY_SIZE) == 0) {
+        seen = true;
+        break;
+      }
+    }
+    if (!seen) distinct++;
+  }
+
+  snprintf(dest, dest_size, "CLK %02d:%02d UTC wait %u/%u n%u/%u",
+           now_dt.hour(),
+           now_dt.minute(),
+           (unsigned int)observer_clock_sync_count,
+           (unsigned int)OBSERVER_CLOCK_SYNC_REQUIRED,
+           (unsigned int)distinct,
+           (unsigned int)OBSERVER_CLOCK_SYNC_DISTINCT);
+}
+
+bool MyMesh::createObserverSavepoint(const uint16_t* activity_bins, uint8_t bin_count, uint8_t newest_bin, char* status, size_t status_size) {
+  if (status && status_size) status[0] = 0;
+  if (!_fs) return false;
+
+  uint16_t next_id = 1;
+  uint8_t count = 0;
+  File index = _fs->open(SAVEPOINT_INDEX_FILE);
+  if (index) {
+    char line[OBSERVER_SAVEPOINT_LINE_SIZE];
+    while (readLine(index, line, sizeof(line))) {
+      unsigned int id = 0;
+      if (sscanf(line, "%u,", &id) == 1) {
+        if (id >= next_id) next_id = id + 1;
+        count++;
+      }
+    }
+    index.close();
+  }
+
+  if (count >= OBSERVER_SAVEPOINT_MAX) {
+    index = _fs->open(SAVEPOINT_INDEX_FILE);
+    if (index) {
+      char line[OBSERVER_SAVEPOINT_LINE_SIZE];
+      if (readLine(index, line, sizeof(line))) {
+        unsigned int old_id = 0;
+        if (sscanf(line, "%u,", &old_id) == 1) {
+          char old_name[16];
+          formatSavepointFilename(old_name, sizeof(old_name), (uint16_t)old_id);
+          _fs->remove(old_name);
+        }
+      }
+      File tmp = _fs->open("/sp_index.tmp", "w");
+      while (tmp && readLine(index, line, sizeof(line))) {
+        tmp.println(line);
+      }
+      index.close();
+      if (tmp) tmp.close();
+      _fs->remove(SAVEPOINT_INDEX_FILE);
+      _fs->rename("/sp_index.tmp", SAVEPOINT_INDEX_FILE);
+    }
+  }
+
+  char filename[16];
+  formatSavepointFilename(filename, sizeof(filename), next_id);
+  File file = _fs->open(filename, "w");
+  if (!file) {
+    if (status && status_size) snprintf(status, status_size, "SP save failed");
+    return false;
+  }
+
+  uint32_t now = getRTCClock()->getCurrentTime();
+  DateTime dt(now);
+  uint32_t rx_total = observer_rx_packets;
+  uint32_t mqtt_total = observer_mqtt_published;
+  int noise_floor = getObserverNoiseFloor();
+  int snr_x4 = (int)(getObserverLastSnr() * 4.0f);
+
+  file.println("section,key,value");
+  file.printf("meta,id,%u\n", (unsigned int)next_id);
+  file.printf("meta,timestamp,%lu\n", (unsigned long)now);
+  file.printf("meta,datetime_utc,%04d-%02d-%02dT%02d:%02d:%02dZ\n",
+              dt.year(), dt.month(), dt.day(), dt.hour(), dt.minute(), dt.second());
+  char clock_sync[32];
+  getObserverClockSyncStatus(clock_sync, sizeof(clock_sync));
+  file.printf("meta,clock_sync,%s\n", clock_sync);
+  file.printf("node,name,%s\n", _prefs.node_name);
+  file.printf("node,lat,%.6f\n", _prefs.node_lat);
+  file.printf("node,lon,%.6f\n", _prefs.node_lon);
+  file.printf("radio,freq,%.3f\n", _prefs.freq);
+  file.printf("radio,sf,%u\n", (unsigned int)_prefs.sf);
+  file.printf("radio,bw,%.2f\n", _prefs.bw);
+  file.printf("radio,cr,%u\n", (unsigned int)_prefs.cr);
+  file.printf("radio,noise_floor,%d\n", noise_floor);
+  file.printf("radio,last_snr_x4,%d\n", snr_x4);
+  file.printf("power,battery_mv,%u\n", (unsigned int)getObserverBattMilliVolts());
+#ifdef ESP32
+  file.printf("system,free_heap,%lu\n", (unsigned long)ESP.getFreeHeap());
+#endif
+  file.printf("counter,rx_total,%lu\n", (unsigned long)rx_total);
+  file.printf("counter,mqtt_total,%lu\n", (unsigned long)mqtt_total);
+  file.printf("mqtt,enabled,%u\n", (unsigned int)_prefs.mqtt_enabled);
+  file.printf("mqtt,status,%s\n", getObserverMqttStatus());
+  file.printf("mqtt,host,%s\n", _prefs.mqtt_host);
+  file.printf("mqtt,publish_failures,%lu\n", (unsigned long)getObserverMqttPublishFailures());
+
+  if (activity_bins && bin_count > 0) {
+    for (uint8_t i = 0; i < bin_count; i++) {
+      uint8_t idx = (newest_bin + bin_count - i) % bin_count;
+      file.printf("hist,%u,%u\n", (unsigned int)i, (unsigned int)activity_bins[idx]);
+    }
+  }
+
+  char line[96];
+  for (uint8_t i = 0; i < 8; i++) {
+    if (getObserverPathLine(i, line, sizeof(line))) {
+      file.printf("path,%u,%s\n", (unsigned int)i, line);
+    }
+  }
+  for (uint8_t i = 0; i < 8; i++) {
+    if (getObserverLastHopLine(i, line, sizeof(line))) {
+      file.printf("heard,%u,%s\n", (unsigned int)i, line);
+    }
+  }
+  file.close();
+
+  index = _fs->open(SAVEPOINT_INDEX_FILE, "a");
+  if (!index) {
+    if (status && status_size) snprintf(status, status_size, "SP index failed");
+    return false;
+  }
+  index.printf("%u,%lu,%lu,%d\n", (unsigned int)next_id, (unsigned long)now, (unsigned long)rx_total, noise_floor);
+  index.close();
+
+  if (status && status_size) snprintf(status, status_size, "SP %u saved", (unsigned int)next_id);
+  return true;
+}
+
+void MyMesh::resetObserverLiveStats() {
+  observer_rx_packets = 0;
+  observer_mqtt_published = 0;
+  memset(observer_paths, 0, sizeof(observer_paths));
+  memset(observer_last_hops, 0, sizeof(observer_last_hops));
+}
+
+void MyMesh::hibernate() {
+#if defined(WITH_MQTT_OBSERVER)
+  mqtt_observer.end();
+#endif
+  radio_driver.powerOff();
+
+#if defined(ESP32) && defined(PIN_USER_BTN)
+  esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_ALL);
+  esp_sleep_pd_config(ESP_PD_DOMAIN_RTC_PERIPH, ESP_PD_OPTION_ON);
+
+  rtc_gpio_pullup_en((gpio_num_t)PIN_USER_BTN);
+  rtc_gpio_pulldown_dis((gpio_num_t)PIN_USER_BTN);
+  rtc_gpio_set_direction((gpio_num_t)PIN_USER_BTN, RTC_GPIO_MODE_INPUT_ONLY);
+
+#if defined(ESP_EXT1_WAKEUP_ANY_LOW)
+  esp_sleep_enable_ext1_wakeup(1ULL << PIN_USER_BTN, ESP_EXT1_WAKEUP_ANY_LOW);
+#else
+  esp_sleep_enable_ext0_wakeup((gpio_num_t)PIN_USER_BTN, 0);
+#endif
+  esp_deep_sleep_start();
+#else
+  if (_board) _board->sleep(0);
+#endif
 }
 
 void MyMesh::applyTempRadioParams(float freq, float bw, uint8_t sf, uint8_t cr, int timeout_mins) {
@@ -1242,6 +1954,158 @@ void MyMesh::handleCommand(uint32_t sender_timestamp, char *command, char *reply
       Serial.printf("\n");
     }
     reply[0] = 0;
+  } else if (strcmp(command, "sp.list") == 0) {
+    File f = _fs->open(SAVEPOINT_INDEX_FILE);
+    if (!f) {
+      strcpy(reply, "SP none");
+    } else {
+      char *dp = reply;
+      char line[OBSERVER_SAVEPOINT_LINE_SIZE];
+      uint8_t count = 0;
+      while (readLine(f, line, sizeof(line))) {
+        unsigned int id = 0;
+        unsigned long ts = 0;
+        unsigned long rx = 0;
+        int nf = 0;
+        if (sscanf(line, "%u,%lu,%lu,%d", &id, &ts, &rx, &nf) != 4) continue;
+
+        DateTime dt((uint32_t)ts);
+        int written = snprintf(dp, 160 - (dp - reply), "%s%u,%02d%02d,%lu,%d",
+                               count ? "\n" : "",
+                               id,
+                               dt.hour(),
+                               dt.minute(),
+                               rx,
+                               nf);
+        if (written < 0 || written >= 160 - (dp - reply)) break;
+        dp += written;
+        count++;
+      }
+      f.close();
+      if (count == 0) strcpy(reply, "SP none");
+    }
+  } else if (memcmp(command, "sp.show ", 8) == 0) {
+    char* arg = &command[8];
+    uint16_t id = (uint16_t)atoi(arg);
+    char* sp = strchr(arg, ' ');
+    char filename[16];
+    formatSavepointFilename(filename, sizeof(filename), id);
+    File f = _fs->open(filename);
+    if (!f) {
+      strcpy(reply, "Err - SP not found");
+    } else if (sp == NULL) {
+      char datetime[6] = "--:--";
+      char rx[12] = "?";
+      char mqtt[12] = "?";
+      char nf[8] = "?";
+      char snr[8] = "?";
+      char batt[8] = "?";
+      char path[40] = "";
+      char heard[40] = "";
+      char line[96];
+
+      while (readLine(f, line, sizeof(line))) {
+        if (memcmp(line, "meta,datetime_utc,", 18) == 0) {
+          char* t = strchr(&line[18], 'T');
+          if (t && strlen(t) >= 6) {
+            datetime[0] = t[1];
+            datetime[1] = t[2];
+            datetime[2] = ':';
+            datetime[3] = t[4];
+            datetime[4] = t[5];
+            datetime[5] = 0;
+          }
+        } else if (memcmp(line, "counter,rx_total,", 17) == 0) {
+          StrHelper::strncpy(rx, &line[17], sizeof(rx));
+        } else if (memcmp(line, "counter,mqtt_total,", 19) == 0) {
+          StrHelper::strncpy(mqtt, &line[19], sizeof(mqtt));
+        } else if (memcmp(line, "radio,noise_floor,", 18) == 0) {
+          StrHelper::strncpy(nf, &line[18], sizeof(nf));
+        } else if (memcmp(line, "radio,last_snr_x4,", 19) == 0) {
+          int snr_x4 = atoi(&line[19]);
+          formatSnrX4(snr, sizeof(snr), snr_x4);
+        } else if (memcmp(line, "power,battery_mv,", 17) == 0) {
+          StrHelper::strncpy(batt, &line[17], sizeof(batt));
+        } else if (path[0] == 0 && memcmp(line, "path,", 5) == 0) {
+          char* value = strchr(&line[5], ',');
+          if (value) StrHelper::strncpy(path, value + 1, sizeof(path));
+        } else if (heard[0] == 0 && memcmp(line, "heard,", 6) == 0) {
+          char* value = strchr(&line[6], ',');
+          if (value) StrHelper::strncpy(heard, value + 1, sizeof(heard));
+        }
+      }
+      f.close();
+
+      snprintf(reply, 160, "SP%u %s rx=%s mqtt=%s nf=%s snr=%s bat=%s\nP %s\nH %s",
+               (unsigned int)id,
+               datetime,
+               rx,
+               mqtt,
+               nf,
+               snr,
+               batt,
+               path[0] ? path : "-",
+               heard[0] ? heard : "-");
+    } else {
+      uint8_t page = (uint8_t)atoi(sp + 1);
+      char *dp = reply;
+      char line[96];
+      uint8_t line_no = 0;
+      uint8_t emitted = 0;
+      uint8_t page_start = page * 4;
+      while (readLine(f, line, sizeof(line))) {
+        if (line_no++ < page_start) continue;
+        if (emitted >= 4) break;
+        int written = snprintf(dp, 160 - (dp - reply), "%s%s", emitted ? "\n" : "", line);
+        if (written < 0 || written >= 160 - (dp - reply)) break;
+        dp += written;
+        emitted++;
+      }
+      f.close();
+      if (emitted == 0) {
+        strcpy(reply, "SP EOF");
+      }
+    }
+  } else if (memcmp(command, "sp.delete ", 10) == 0) {
+    uint16_t delete_id = (uint16_t)atoi(&command[10]);
+    char filename[16];
+    formatSavepointFilename(filename, sizeof(filename), delete_id);
+    bool removed_file = _fs->remove(filename);
+    File in = _fs->open(SAVEPOINT_INDEX_FILE);
+    File out = _fs->open("/sp_index.tmp", "w");
+    bool removed_index = false;
+    if (in && out) {
+      char line[OBSERVER_SAVEPOINT_LINE_SIZE];
+      while (readLine(in, line, sizeof(line))) {
+        unsigned int id = 0;
+        if (sscanf(line, "%u,", &id) == 1 && id == delete_id) {
+          removed_index = true;
+          continue;
+        }
+        out.println(line);
+      }
+    }
+    if (in) in.close();
+    if (out) out.close();
+    _fs->remove(SAVEPOINT_INDEX_FILE);
+    _fs->rename("/sp_index.tmp", SAVEPOINT_INDEX_FILE);
+    strcpy(reply, (removed_file || removed_index) ? "OK - SP deleted" : "Err - SP not found");
+  } else if (strcmp(command, "sp.clear") == 0) {
+    File f = _fs->open(SAVEPOINT_INDEX_FILE);
+    if (f) {
+      char line[OBSERVER_SAVEPOINT_LINE_SIZE];
+      while (readLine(f, line, sizeof(line))) {
+        unsigned int id = 0;
+        if (sscanf(line, "%u,", &id) == 1) {
+          char filename[16];
+          formatSavepointFilename(filename, sizeof(filename), (uint16_t)id);
+          _fs->remove(filename);
+        }
+      }
+      f.close();
+    }
+    _fs->remove(SAVEPOINT_INDEX_FILE);
+    strcpy(reply, "OK - SP cleared");
   } else if (memcmp(command, "discover.neighbors", 18) == 0) {
     const char* sub = command + 18;
     while (*sub == ' ') sub++;
@@ -1259,6 +2123,9 @@ void MyMesh::handleCommand(uint32_t sender_timestamp, char *command, char *reply
 void MyMesh::loop() {
 #ifdef WITH_BRIDGE
   bridge.loop();
+#endif
+#ifdef WITH_MQTT_OBSERVER
+  mqtt_observer.loop();
 #endif
 
   mesh::Mesh::loop();
@@ -1305,6 +2172,9 @@ void MyMesh::loop() {
 bool MyMesh::hasPendingWork() const {
 #if defined(WITH_BRIDGE)
   if (bridge.isRunning()) return true;  // bridge needs WiFi radio, can't sleep
+#endif
+#if defined(WITH_MQTT_OBSERVER)
+  if (mqtt_observer.isRunning()) return true;
 #endif
   return _mgr->getOutboundTotal() > 0;
 }

@@ -61,6 +61,17 @@ struct NodePrefs { // persisted to file
   uint8_t rx_boosted_gain; // power settings
   uint8_t path_hash_mode;   // which path mode to use when sending
   uint8_t loop_detect;
+#ifdef WITH_MQTT_OBSERVER
+  uint8_t mqtt_enabled;
+  uint8_t mqtt_tls;
+  uint16_t mqtt_port;
+  char wifi_ssid[33];
+  char wifi_password[65];
+  char mqtt_host[65];
+  char mqtt_username[65];
+  char mqtt_password[129];
+  char mqtt_topic[96];
+#endif
 };
 
 class CommonCLICallbacks {
@@ -104,6 +115,14 @@ public:
   };
 
   virtual void restartBridge() {
+    // no op by default
+  };
+
+  virtual void setMqttObserverState(bool enable) {
+    // no op by default
+  };
+
+  virtual void restartMqttObserver() {
     // no op by default
   };
 
