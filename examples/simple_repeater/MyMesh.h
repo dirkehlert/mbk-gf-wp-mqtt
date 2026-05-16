@@ -257,6 +257,7 @@ public:
   uint16_t getObserverBattMilliVolts() const { return _board ? _board->getBattMilliVolts() : 0; }
   int getObserverNoiseFloor() const { return _radio ? _radio->getNoiseFloor() : 0; }
   float getObserverLastSnr() const { return _radio ? _radio->getLastSNR() : 0.0f; }
+  void getObserverDiagLine(char* dest, size_t dest_size) const;
   bool getObserverPathLine(uint8_t index, char* dest, size_t dest_size) const;
   bool getObserverLatestPathLine(char* dest, size_t dest_size) const;
   bool getObserverLastHopLine(uint8_t index, char* dest, size_t dest_size) const;

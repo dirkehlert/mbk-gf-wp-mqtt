@@ -246,6 +246,9 @@ void UITask::renderCurrScreen() {
       _display->setCursor(0, 92);
       _display->setColor(DisplayDriver::LIGHT);
       _display->print(_status);
+    } else if (_mesh) {
+      _mesh->getObserverDiagLine(tmp, sizeof(tmp));
+      _display->drawTextEllipsized(0, 92, _display->width(), tmp);
     }
   } else if (_screen == 1) {  // path screen
     int chart_x = _display->width() - PATH_CHART_WIDTH;

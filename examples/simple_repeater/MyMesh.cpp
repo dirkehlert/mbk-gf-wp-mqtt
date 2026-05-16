@@ -1,6 +1,7 @@
 #include "MyMesh.h"
 #include <algorithm>
 #if defined(ESP32)
+#include <esp_system.h>
 #include <esp_sleep.h>
 #include <driver/rtc_io.h>
 #endif
@@ -78,6 +79,24 @@
 #define SAVEPOINT_INDEX_FILE     "/sp_index.csv"
 
 #define CLOCK_SYNC_MIN_TIME      1735689600UL  // 2025-01-01T00:00:00Z
+
+#if defined(ESP32)
+static const char* observerResetReasonString(esp_reset_reason_t reason) {
+  switch (reason) {
+    case ESP_RST_POWERON: return "PowerOn";
+    case ESP_RST_EXT: return "External";
+    case ESP_RST_SW: return "Software";
+    case ESP_RST_PANIC: return "Panic";
+    case ESP_RST_INT_WDT: return "IntWDT";
+    case ESP_RST_TASK_WDT: return "TaskWDT";
+    case ESP_RST_WDT: return "WDT";
+    case ESP_RST_DEEPSLEEP: return "Sleep";
+    case ESP_RST_BROWNOUT: return "Brownout";
+    case ESP_RST_SDIO: return "SDIO";
+    default: return "Unknown";
+  }
+}
+#endif
 #define CLOCK_SYNC_MAX_TIME      2051222400UL  // 2035-01-01T00:00:00Z
 
 #define REQ_TYPE_GET_STATUS         0x01 // same as _GET_STATS
@@ -1471,6 +1490,19 @@ bool MyMesh::getObserverLastHopLine(uint8_t index, char* dest, size_t dest_size)
   return false;
 }
 
+void MyMesh::getObserverDiagLine(char* dest, size_t dest_size) const {
+  if (!dest || dest_size == 0) return;
+
+#if defined(ESP32)
+  snprintf(dest, dest_size, "Boot:%s H:%luk/%luk",
+           observerResetReasonString(esp_reset_reason()),
+           (unsigned long)(ESP.getFreeHeap() / 1024),
+           (unsigned long)(ESP.getMinFreeHeap() / 1024));
+#else
+  snprintf(dest, dest_size, "Boot:n/a Up:%lus", (unsigned long)(millis() / 1000));
+#endif
+}
+
 bool MyMesh::getObserverSavepointLine(uint8_t index, char* dest, size_t dest_size) const {
   if (!dest || dest_size == 0 || !_fs) return false;
   dest[0] = 0;
@@ -2115,6 +2147,14 @@ void MyMesh::handleCommand(uint32_t sender_timestamp, char *command, char *reply
       sendNodeDiscoverReq();
       strcpy(reply, "OK - Discover sent");
     }
+  } else if (strcmp(command, "diag") == 0) {
+    char diag[80];
+    getObserverDiagLine(diag, sizeof(diag));
+    snprintf(reply, 160, "%s Up:%lus RX:%lu MQTT:%lu",
+             diag,
+             (unsigned long)(millis() / 1000),
+             (unsigned long)observer_rx_packets,
+             (unsigned long)observer_mqtt_published);
   } else{
     _cli.handleCommand(sender_timestamp, command, reply);  // common CLI commands
   }
