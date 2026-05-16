@@ -25,12 +25,12 @@ jobs:
       fail-fast: false
       matrix:
         environment:
-          # Primary field monitor target
+          # Project target: Heltec Wireless Paper field monitor.
+          #
+          # The retained reference board configs are kept available for manual
+          # experiments, but this firmware has diverged from upstream's generic
+          # simple_repeater and now depends on the Wireless Paper observer setup.
           - Heltec_Wireless_Paper_mqtt_observer
-          # Kept reference targets
-          - LilyGo_T-Echo_repeater
-          - WioTrackerL1_repeater
-          - ThinkNode_M1_repeater
 
     steps:
       - name: Clone Repo
