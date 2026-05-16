@@ -17,6 +17,7 @@
 #define PATH_CHART_WIDTH     42
 #define PATH_CHART_TOP       18
 #define PATH_CHART_ROW_H     8
+#define UI_LEFT_MARGIN       6
 
 // 'meshcore', 128x13px
 static const uint8_t meshcore_logo [] PROGMEM = {
@@ -199,24 +200,24 @@ void UITask::renderCurrScreen() {
     _display->print(node_type);
   } else if (_screen == 0) {  // home screen
     // node name
-    _display->setCursor(0, 0);
+    _display->setCursor(UI_LEFT_MARGIN, 0);
     _display->setTextSize(1);
     _display->setColor(DisplayDriver::GREEN);
     _display->print(_node_prefs->node_name);
     renderTopStats(12);
 
     // freq / sf
-    _display->setCursor(0, 28);
+    _display->setCursor(UI_LEFT_MARGIN, 28);
     _display->setColor(DisplayDriver::YELLOW);
     sprintf(tmp, "FREQ: %06.3f SF%d", _node_prefs->freq, _node_prefs->sf);
     _display->print(tmp);
 
     // bw / cr
-    _display->setCursor(0, 40);
+    _display->setCursor(UI_LEFT_MARGIN, 40);
     sprintf(tmp, "BW: %03.2f CR: %d", _node_prefs->bw, _node_prefs->cr);
     _display->print(tmp);
 
-    _display->setCursor(0, 53);
+    _display->setCursor(UI_LEFT_MARGIN, 53);
     _display->setColor(DisplayDriver::LIGHT);
     if (_mesh) {
       const char* host = _mesh->getObserverMqttHost();
@@ -226,13 +227,13 @@ void UITask::renderCurrScreen() {
 
       uint32_t rx_total = _mesh->getObserverRxPackets();
       uint32_t mqtt_total = _mesh->getObserverMqttPublished();
-      _display->setCursor(0, 66);
+      _display->setCursor(UI_LEFT_MARGIN, 66);
       sprintf(tmp, "1m RX:%lu MQTT:%lu",
               (unsigned long)(rx_total - _prev_rx_total),
               (unsigned long)(mqtt_total - _prev_mqtt_total));
       _display->print(tmp);
 
-      _display->setCursor(0, 79);
+      _display->setCursor(UI_LEFT_MARGIN, 79);
       sprintf(tmp, "Tot RX:%lu MQTT:%lu",
               (unsigned long)rx_total,
               (unsigned long)mqtt_total);
@@ -243,19 +244,19 @@ void UITask::renderCurrScreen() {
     }
 
     if (_status[0] && millis() < _status_until) {
-      _display->setCursor(0, 92);
+      _display->setCursor(UI_LEFT_MARGIN, 92);
       _display->setColor(DisplayDriver::LIGHT);
       _display->print(_status);
     } else if (_mesh) {
       _mesh->getObserverDiagLine(tmp, sizeof(tmp));
-      _display->drawTextEllipsized(0, 92, _display->width(), tmp);
+      _display->drawTextEllipsized(UI_LEFT_MARGIN, 92, _display->width() - UI_LEFT_MARGIN, tmp);
     }
   } else if (_screen == 1) {  // path screen
     int chart_x = _display->width() - PATH_CHART_WIDTH;
-    int path_width = chart_x - 3;
+    int path_width = chart_x - UI_LEFT_MARGIN - 3;
 
     _display->setTextSize(1);
-    _display->setCursor(0, 0);
+    _display->setCursor(UI_LEFT_MARGIN, 0);
     _display->setColor(DisplayDriver::GREEN);
     _display->print("Paths");
     renderTopStats();
@@ -263,29 +264,29 @@ void UITask::renderCurrScreen() {
     _display->setColor(DisplayDriver::LIGHT);
     renderRxActivityChart();
     if (_mesh) {
-      _display->drawTextEllipsized(0, 14, path_width, "Cnt   Age  Path");
+      _display->drawTextEllipsized(UI_LEFT_MARGIN, 14, path_width, "Cnt   Age  Path");
 
       bool any = false;
       for (uint8_t i = 0; i < 6; i++) {
         if (_mesh->getObserverPathLine(i, tmp, sizeof(tmp))) {
-          _display->drawTextEllipsized(0, 26 + i * 11, path_width, tmp);
+          _display->drawTextEllipsized(UI_LEFT_MARGIN, 26 + i * 11, path_width, tmp);
           any = true;
         }
       }
       if (!any) {
-        _display->drawTextEllipsized(0, 30, path_width, "No RX paths");
+        _display->drawTextEllipsized(UI_LEFT_MARGIN, 30, path_width, "No RX paths");
       }
       if (_mesh->getObserverLatestPathLine(tmp, sizeof(tmp))) {
-        _display->drawTextEllipsized(0, 92, path_width, "Last path");
-        _display->drawTextEllipsized(0, 104, path_width, tmp);
+        _display->drawTextEllipsized(UI_LEFT_MARGIN, 92, path_width, "Last path");
+        _display->drawTextEllipsized(UI_LEFT_MARGIN, 104, path_width, tmp);
       }
     }
   } else if (_screen == 2) {  // heard screen
     int chart_x = _display->width() - PATH_CHART_WIDTH;
-    int table_width = chart_x - 3;
+    int table_width = chart_x - UI_LEFT_MARGIN - 3;
 
     _display->setTextSize(1);
-    _display->setCursor(0, 0);
+    _display->setCursor(UI_LEFT_MARGIN, 0);
     _display->setColor(DisplayDriver::GREEN);
     _display->print("Heards");
     renderTopStats();
@@ -294,25 +295,25 @@ void UITask::renderCurrScreen() {
     renderRxActivityChart();
     if (_mesh) {
       if (_status[0] && millis() < _status_until) {
-        _display->drawTextEllipsized(0, 16, table_width, _status);
+        _display->drawTextEllipsized(UI_LEFT_MARGIN, 16, table_width, _status);
       } else {
-        _display->drawTextEllipsized(0, 16, table_width, "Hop    Age   Max   Last");
+        _display->drawTextEllipsized(UI_LEFT_MARGIN, 16, table_width, "Hop    Age   Max   Last");
       }
 
       bool any = false;
       for (uint8_t i = 0; i < 8; i++) {
         if (_mesh->getObserverLastHopLine(i, tmp, sizeof(tmp))) {
-          _display->drawTextEllipsized(0, 28 + i * 11, table_width, tmp);
+          _display->drawTextEllipsized(UI_LEFT_MARGIN, 28 + i * 11, table_width, tmp);
           any = true;
         }
       }
       if (!any) {
-        _display->drawTextEllipsized(0, 30, table_width, "No RX hops");
+        _display->drawTextEllipsized(UI_LEFT_MARGIN, 30, table_width, "No RX hops");
       }
     }
   } else if (_screen == 3) {  // savepoints screen
     _display->setTextSize(1);
-    _display->setCursor(0, 0);
+    _display->setCursor(UI_LEFT_MARGIN, 0);
     _display->setColor(DisplayDriver::GREEN);
     _display->print("Savepoints");
     renderTopStats();
@@ -320,62 +321,62 @@ void UITask::renderCurrScreen() {
     _display->setColor(DisplayDriver::LIGHT);
     if (_mesh) {
       _mesh->getObserverClockSyncStatus(tmp, sizeof(tmp));
-      _display->drawTextEllipsized(0, 12, _display->width(), tmp);
+      _display->drawTextEllipsized(UI_LEFT_MARGIN, 12, _display->width() - UI_LEFT_MARGIN, tmp);
 
       if (_status[0] && millis() < _status_until) {
-        _display->drawTextEllipsized(0, 24, _display->width(), _status);
+        _display->drawTextEllipsized(UI_LEFT_MARGIN, 24, _display->width() - UI_LEFT_MARGIN, _status);
       } else {
-        _display->setCursor(0, 24);
+        _display->setCursor(UI_LEFT_MARGIN, 24);
         _display->print("ID   Time  RX    NF");
       }
 
       bool any = false;
       for (uint8_t i = 0; i < 6; i++) {
         if (_mesh->getObserverSavepointLine(i, tmp, sizeof(tmp))) {
-          _display->drawTextEllipsized(0, 36 + i * 11, _display->width(), tmp);
+          _display->drawTextEllipsized(UI_LEFT_MARGIN, 36 + i * 11, _display->width() - UI_LEFT_MARGIN, tmp);
           any = true;
         }
       }
       if (!any) {
-        _display->setCursor(0, 38);
+        _display->setCursor(UI_LEFT_MARGIN, 38);
         _display->print("No savepoints");
       }
     }
   } else {  // mqtt screen
     _display->setTextSize(1);
-    _display->setCursor(0, 0);
+    _display->setCursor(UI_LEFT_MARGIN, 0);
     _display->setColor(DisplayDriver::GREEN);
     _display->print("MQTT");
     renderTopStats();
 
     _display->setColor(DisplayDriver::LIGHT);
     if (_mesh) {
-      _display->setCursor(0, 16);
+      _display->setCursor(UI_LEFT_MARGIN, 16);
       snprintf(tmp, sizeof(tmp), "WiFi/MQTT:%s", _mesh->isObserverMqttEnabled() ? "on" : "off");
       _display->print(tmp);
 
-      _display->setCursor(0, 28);
+      _display->setCursor(UI_LEFT_MARGIN, 28);
       snprintf(tmp, sizeof(tmp), "State:%s code:%d", _mesh->getObserverMqttStatus(), _mesh->getObserverMqttState());
       _display->print(tmp);
 
-      _display->setCursor(0, 40);
+      _display->setCursor(UI_LEFT_MARGIN, 40);
       snprintf(tmp, sizeof(tmp), "Err:%s", _mesh->getObserverMqttLastError());
       _display->print(tmp);
 
-      _display->setCursor(0, 52);
+      _display->setCursor(UI_LEFT_MARGIN, 52);
       snprintf(tmp, sizeof(tmp), "WiFiF:%lu ConnF:%lu",
                (unsigned long)_mesh->getObserverMqttWifiFailures(),
                (unsigned long)_mesh->getObserverMqttConnectFailures());
       _display->print(tmp);
 
-      _display->setCursor(0, 64);
+      _display->setCursor(UI_LEFT_MARGIN, 64);
       snprintf(tmp, sizeof(tmp), "PubF:%lu",
                (unsigned long)_mesh->getObserverMqttPublishFailures());
       _display->print(tmp);
     }
 
     if (_status[0] && millis() < _status_until) {
-      _display->setCursor(0, 82);
+      _display->setCursor(UI_LEFT_MARGIN, 82);
       _display->setColor(DisplayDriver::LIGHT);
       _display->print(_status);
     }
@@ -447,14 +448,14 @@ void UITask::loop() {
             _display->startFrame();
             _display->setTextSize(1);
             _display->setColor(DisplayDriver::GREEN);
-            _display->setCursor(0, 0);
+            _display->setCursor(UI_LEFT_MARGIN, 0);
             _display->print(_node_prefs->node_name);
             _display->setColor(DisplayDriver::LIGHT);
-            _display->setCursor(0, 28);
+            _display->setCursor(UI_LEFT_MARGIN, 28);
             _display->print("Hibernate");
-            _display->setCursor(0, 42);
+            _display->setCursor(UI_LEFT_MARGIN, 42);
             _display->print("Node is off");
-            _display->setCursor(0, 68);
+            _display->setCursor(UI_LEFT_MARGIN, 68);
             _display->print("Press button to wake");
             _display->endFrame();
             while (user_btn.isPressed()) {
