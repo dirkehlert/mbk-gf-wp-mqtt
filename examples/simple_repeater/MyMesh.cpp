@@ -1689,12 +1689,12 @@ bool MyMesh::createObserverSavepoint(const uint16_t* activity_bins, uint8_t bin_
   }
 
   char line[96];
-  for (uint8_t i = 0; i < 8; i++) {
+  for (uint8_t i = 0; i < OBSERVER_PATH_HISTORY_SIZE; i++) {
     if (getObserverPathLine(i, line, sizeof(line))) {
       file.printf("path,%u,%s\n", (unsigned int)i, line);
     }
   }
-  for (uint8_t i = 0; i < 8; i++) {
+  for (uint8_t i = 0; i < OBSERVER_LAST_HOP_HISTORY_SIZE; i++) {
     if (getObserverLastHopLine(i, line, sizeof(line))) {
       file.printf("heard,%u,%s\n", (unsigned int)i, line);
     }
