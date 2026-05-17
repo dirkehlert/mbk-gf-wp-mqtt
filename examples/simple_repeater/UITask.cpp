@@ -280,6 +280,7 @@ void UITask::syncObserverTotalsAfterReset() {
 
 void UITask::renderCurrScreen() {
   char tmp[80];
+  if (_mesh) _mesh->setObserverHealthScreen(_screen);
   if (!_dump_mode && millis() < BOOT_SCREEN_MILLIS) { // boot screen
     // meshcore logo
     _display->setColor(DisplayDriver::BLUE);
@@ -439,6 +440,8 @@ void UITask::renderCurrScreen() {
     } else if (_mesh) {
       _mesh->getObserverDiagLine(tmp, sizeof(tmp));
       _display->drawTextEllipsized(UI_LEFT_MARGIN, 92, _display->width() - UI_LEFT_MARGIN, tmp);
+      _mesh->getObserverHealthLine(tmp, sizeof(tmp));
+      _display->drawTextEllipsized(UI_LEFT_MARGIN, 104, _display->width() - UI_LEFT_MARGIN, tmp);
     }
   } else if (_screen == 1) {  // path screen
     int chart_x = _display->width() - PATH_CHART_WIDTH;
@@ -562,6 +565,9 @@ void UITask::renderCurrScreen() {
       snprintf(tmp, sizeof(tmp), "PubF:%lu",
                (unsigned long)_mesh->getObserverMqttPublishFailures());
       _display->print(tmp);
+
+      _mesh->getObserverHealthLine(tmp, sizeof(tmp));
+      _display->drawTextEllipsized(UI_LEFT_MARGIN, 76, _display->width() - UI_LEFT_MARGIN, tmp);
     }
 
     if (_status[0] && millis() < _status_until) {

@@ -3,6 +3,7 @@
 #if defined(ESP32)
 #include <esp_system.h>
 #include <esp_sleep.h>
+#include <esp_attr.h>
 #include <driver/rtc_io.h>
 #endif
 
@@ -81,6 +82,40 @@
 #define CLOCK_SYNC_MIN_TIME      1735689600UL  // 2025-01-01T00:00:00Z
 
 #if defined(ESP32)
+struct ObserverHealthBreadcrumb {
+  uint32_t magic;
+  uint32_t seq;
+  uint32_t uptime_s;
+  uint32_t rx_total;
+  uint32_t mqtt_total;
+  uint32_t free_heap;
+  uint32_t min_heap;
+  uint8_t screen;
+  uint8_t reserved[3];
+  uint32_t crc;
+};
+
+static RTC_NOINIT_ATTR ObserverHealthBreadcrumb observer_health_breadcrumb;
+static const uint32_t OBSERVER_HEALTH_MAGIC = 0x4D425748UL;  // MBWH
+static const unsigned long OBSERVER_HEALTH_UPDATE_MS = 10000;
+
+static uint32_t observerHealthCrc(const ObserverHealthBreadcrumb& item) {
+  uint32_t crc = 0xA5C35A5CUL;
+  crc ^= item.magic;
+  crc ^= item.seq;
+  crc ^= item.uptime_s;
+  crc ^= item.rx_total;
+  crc ^= item.mqtt_total;
+  crc ^= item.free_heap;
+  crc ^= item.min_heap;
+  crc ^= item.screen;
+  return crc;
+}
+
+static bool observerHealthValid(const ObserverHealthBreadcrumb& item) {
+  return item.magic == OBSERVER_HEALTH_MAGIC && item.crc == observerHealthCrc(item);
+}
+
 static const char* observerResetReasonString(esp_reset_reason_t reason) {
   switch (reason) {
     case ESP_RST_POWERON: return "PowerOn";
@@ -989,6 +1024,24 @@ MyMesh::MyMesh(mesh::MainBoard &board, mesh::Radio &radio, mesh::MillisecondCloc
   observer_rx_packets = 0;
   observer_mqtt_published = 0;
   observer_path_next = 0;
+  observer_next_health_at = 10000;
+  observer_health_screen = 0;
+  observer_prev_health_valid = false;
+  observer_prev_health_screen = 0;
+  observer_prev_health_uptime_s = 0;
+  observer_prev_health_rx = 0;
+  observer_prev_health_free_heap = 0;
+  observer_prev_health_min_heap = 0;
+#if defined(ESP32)
+  if (observerHealthValid(observer_health_breadcrumb)) {
+    observer_prev_health_valid = true;
+    observer_prev_health_screen = observer_health_breadcrumb.screen;
+    observer_prev_health_uptime_s = observer_health_breadcrumb.uptime_s;
+    observer_prev_health_rx = observer_health_breadcrumb.rx_total;
+    observer_prev_health_free_heap = observer_health_breadcrumb.free_heap;
+    observer_prev_health_min_heap = observer_health_breadcrumb.min_heap;
+  }
+#endif
 #ifdef ENABLE_OBSERVER_CLOCK_SYNC
   observer_clock_sync_next = 0;
   observer_clock_sync_count = 0;
@@ -1522,6 +1575,63 @@ void MyMesh::getObserverDiagLine(char* dest, size_t dest_size) const {
            (unsigned long)(ESP.getMinFreeHeap() / 1024));
 #else
   snprintf(dest, dest_size, "Boot:n/a Up:%lus", (unsigned long)(millis() / 1000));
+#endif
+}
+
+void MyMesh::getObserverHealthLine(char* dest, size_t dest_size) const {
+  if (!dest || dest_size == 0) return;
+
+  if (!observer_prev_health_valid) {
+#if defined(ESP32)
+    snprintf(dest, dest_size, "Prev:none H:%luk/%luk",
+             (unsigned long)(ESP.getFreeHeap() / 1024),
+             (unsigned long)(ESP.getMinFreeHeap() / 1024));
+#else
+    snprintf(dest, dest_size, "Prev:none");
+#endif
+    return;
+  }
+
+  uint32_t up = observer_prev_health_uptime_s;
+  char up_col[8];
+  if (up < 180) {
+    snprintf(up_col, sizeof(up_col), "%lus", (unsigned long)up);
+  } else if (up < 3600) {
+    snprintf(up_col, sizeof(up_col), "%lum", (unsigned long)(up / 60));
+  } else {
+    snprintf(up_col, sizeof(up_col), "%luh", (unsigned long)(up / 3600));
+  }
+
+  snprintf(dest, dest_size, "Prev:S%u %s H:%luk/%luk RX:%lu",
+           (unsigned int)observer_prev_health_screen,
+           up_col,
+           (unsigned long)(observer_prev_health_free_heap / 1024),
+           (unsigned long)(observer_prev_health_min_heap / 1024),
+           (unsigned long)observer_prev_health_rx);
+}
+
+void MyMesh::setObserverHealthScreen(uint8_t screen) {
+  observer_health_screen = screen;
+}
+
+void MyMesh::updateObserverHealth() {
+#if defined(ESP32)
+  unsigned long now = millis();
+  if ((long)(now - observer_next_health_at) < 0) return;
+  observer_next_health_at = now + OBSERVER_HEALTH_UPDATE_MS;
+
+  ObserverHealthBreadcrumb item;
+  item.magic = OBSERVER_HEALTH_MAGIC;
+  item.seq = observerHealthValid(observer_health_breadcrumb) ? observer_health_breadcrumb.seq + 1 : 1;
+  item.uptime_s = now / 1000;
+  item.rx_total = observer_rx_packets;
+  item.mqtt_total = observer_mqtt_published;
+  item.free_heap = ESP.getFreeHeap();
+  item.min_heap = ESP.getMinFreeHeap();
+  item.screen = observer_health_screen;
+  memset(item.reserved, 0, sizeof(item.reserved));
+  item.crc = observerHealthCrc(item);
+  observer_health_breadcrumb = item;
 #endif
 }
 
@@ -2187,12 +2297,15 @@ void MyMesh::handleCommand(uint32_t sender_timestamp, char *command, char *reply
     }
   } else if (strcmp(command, "diag") == 0) {
     char diag[80];
+    char health[80];
     getObserverDiagLine(diag, sizeof(diag));
-    snprintf(reply, 160, "%s Up:%lus RX:%lu MQTT:%lu",
+    getObserverHealthLine(health, sizeof(health));
+    snprintf(reply, 160, "%s Up:%lus RX:%lu MQTT:%lu\n%s",
              diag,
              (unsigned long)(millis() / 1000),
              (unsigned long)observer_rx_packets,
-             (unsigned long)observer_mqtt_published);
+             (unsigned long)observer_mqtt_published,
+             health);
   } else{
     _cli.handleCommand(sender_timestamp, command, reply);  // common CLI commands
   }
@@ -2244,6 +2357,7 @@ void MyMesh::loop() {
   uint32_t now = millis();
   uptime_millis += now - last_millis;
   last_millis = now;
+  updateObserverHealth();
 }
 
 // To check if there is pending work

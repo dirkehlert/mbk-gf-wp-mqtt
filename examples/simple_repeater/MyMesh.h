@@ -155,6 +155,14 @@ class MyMesh : public mesh::Mesh, public CommonCLICallbacks {
   int  matching_peer_indexes[MAX_CLIENTS];
   uint32_t observer_rx_packets;
   uint32_t observer_mqtt_published;
+  unsigned long observer_next_health_at;
+  uint32_t observer_prev_health_uptime_s;
+  uint32_t observer_prev_health_rx;
+  uint32_t observer_prev_health_free_heap;
+  uint32_t observer_prev_health_min_heap;
+  uint8_t observer_health_screen;
+  uint8_t observer_prev_health_screen;
+  bool observer_prev_health_valid;
   mesh::MainBoard* _board;
   ObserverPathInfo observer_paths[OBSERVER_PATH_HISTORY_SIZE];
   ObserverLastHopInfo observer_last_hops[OBSERVER_LAST_HOP_HISTORY_SIZE];
@@ -284,6 +292,8 @@ public:
   int getObserverNoiseFloor() const { return _radio ? _radio->getNoiseFloor() : 0; }
   float getObserverLastSnr() const { return _radio ? _radio->getLastSNR() : 0.0f; }
   void getObserverDiagLine(char* dest, size_t dest_size) const;
+  void getObserverHealthLine(char* dest, size_t dest_size) const;
+  void setObserverHealthScreen(uint8_t screen);
   bool getObserverPathLine(uint8_t index, char* dest, size_t dest_size) const;
   bool getObserverLatestPathLine(char* dest, size_t dest_size) const;
   bool getObserverLastHopLine(uint8_t index, char* dest, size_t dest_size) const;
@@ -302,6 +312,7 @@ public:
   }
 
   void sendFloodScoped(const TransportKey& scope, mesh::Packet* pkt, uint32_t delay_millis, uint8_t path_hash_size);
+  void updateObserverHealth();
 
   // CommonCLICallbacks
   void applyTempRadioParams(float freq, float bw, uint8_t sf, uint8_t cr, int timeout_mins) override;
