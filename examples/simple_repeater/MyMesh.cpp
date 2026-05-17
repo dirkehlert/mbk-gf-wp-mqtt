@@ -1724,7 +1724,8 @@ void MyMesh::getObserverClockSyncStatus(char* dest, size_t dest_size) const {
 }
 
 #ifdef ENABLE_OBSERVER_SAVEPOINTS
-bool MyMesh::createObserverSavepoint(const uint16_t* activity_bins, uint8_t bin_count, uint8_t newest_bin, char* status, size_t status_size) {
+bool MyMesh::createObserverSavepoint(const uint16_t* activity_bins, const uint16_t* airtime_bins, uint8_t bin_count,
+                                     uint8_t newest_bin, char* status, size_t status_size) {
   if (status && status_size) status[0] = 0;
   if (!_fs) return false;
 
@@ -1813,6 +1814,12 @@ bool MyMesh::createObserverSavepoint(const uint16_t* activity_bins, uint8_t bin_
     for (uint8_t i = 0; i < bin_count; i++) {
       uint8_t idx = (newest_bin + bin_count - i) % bin_count;
       file.printf("hist,%u,%u\n", (unsigned int)i, (unsigned int)activity_bins[idx]);
+    }
+  }
+  if (airtime_bins && bin_count > 0) {
+    for (uint8_t i = 0; i < bin_count; i++) {
+      uint8_t idx = (newest_bin + bin_count - i) % bin_count;
+      file.printf("airtime_ms,%u,%u\n", (unsigned int)i, (unsigned int)airtime_bins[idx]);
     }
   }
 

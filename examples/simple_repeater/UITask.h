@@ -35,7 +35,9 @@ class UITask {
   uint32_t _last_min_rx;
   uint32_t _last_min_mqtt;
   uint32_t _activity_prev_rx_total;
+  uint32_t _activity_prev_air_ms;
   uint16_t _activity_bins[RX_ACTIVITY_BINS];
+  uint16_t _airtime_bins[RX_ACTIVITY_BINS];
   uint8_t _activity_bin_index;
   unsigned long _next_activity_rollover;
   HeatRow _heat_rows[HEAT_ROWS];
@@ -50,6 +52,7 @@ class UITask {
   void updateRxActivityBins();
   void renderRxActivityChart();
   void renderRxActivityHistogram();
+  void renderNetworkLoadScreen();
   void updatePathHeatSnapshot();
   void renderPathHeatScreen();
   void syncObserverTotalsAfterReset();
@@ -58,8 +61,10 @@ public:
     _next_read = _next_refresh = _status_until = _next_stats_rollover = _next_activity_rollover = 0;
     _prev_rx_total = _prev_mqtt_total = _render_rx_total = _last_min_rx = _last_min_mqtt = 0;
     _activity_prev_rx_total = 0;
+    _activity_prev_air_ms = 0;
     _activity_bin_index = 0;
     memset(_activity_bins, 0, sizeof(_activity_bins));
+    memset(_airtime_bins, 0, sizeof(_airtime_bins));
     memset(_heat_rows, 0, sizeof(_heat_rows));
     _heat_row_count = 0;
     _heat_valid = false;
@@ -71,7 +76,7 @@ public:
 #ifdef FIELD_MONITOR_LITE
     return 5;
 #else
-    return 6;
+    return 7;
 #endif
   }
 #ifdef ENABLE_DISPLAY_DUMP

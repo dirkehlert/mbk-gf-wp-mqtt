@@ -127,9 +127,13 @@ Screen-Galerie:
 | --- | --- | --- |
 | ![Status](docs/screens/00-status.png) | ![Paths](docs/screens/01-paths.png) | ![Heards](docs/screens/02-heards.png) |
 
-| Heatstrip | Savepoints | MQTT |
+| Heatstrip | Load | Savepoints |
 | --- | --- | --- |
-| ![Heatstrip](docs/screens/03-heatstrip.png) | ![Savepoints](docs/screens/04-savepoints.png) | ![MQTT](docs/screens/05-mqtt.png) |
+| ![Heatstrip](docs/screens/03-heatstrip.png) | ![Load](docs/screens/04-load.png) | ![Savepoints](docs/screens/05-savepoints.png) |
+
+| MQTT |
+| --- |
+| ![MQTT](docs/screens/06-mqtt.png) |
 
 Status-Screen:
 
@@ -176,13 +180,19 @@ Heatstrip-Screen:
 - `PC` rechts zeigt, in wie vielen Pfad-Triples dieser Repeater vorkommt
 - Snapshot wird beim Betreten aufgebaut und danach nur per Doppelklick auf diesem Screen aktualisiert
 
+Load-Screen:
+
+- prozentuale RX-Netzauslastung auf Basis der geschaetzten Airtime
+- 12-Minuten-Verlauf als Balken von links nach rechts
+- rechte Legende mit aktueller Minute, Maximum und 12-Minuten-Durchschnitt
+
 Savepoints-Screen:
 
 - zweite Zeile zeigt den Clock-Sync-Status
 - listet gespeicherte Savepoints mit ID, Uhrzeit, RX-Zaehler und Noise Floor
 - Doppelklick erzeugt einen neuen Savepoint im Flash
 - Long Press setzt Live-Zaehler, Pfade und Heards zurueck
-- Histogramme laufen beim Reset weiter und werden beim Savepoint mitgespeichert
+- RX-Histogramm und Load-Airtime laufen beim Reset weiter und werden beim Savepoint mitgespeichert
 
 Display-Snapshot aktualisieren:
 
@@ -212,7 +222,7 @@ Danach die Werte in `platformio.local.ini` anpassen. Diese Datei ist in
 
 ## Tastenbedienung
 
-- Kurzer Klick: Status-Screen, Pfad-Screen, Heards-Screen, Heatstrip-Screen, Savepoints-Screen und MQTT-Screen durchschalten
+- Kurzer Klick: Status-Screen, Pfad-Screen, Heards-Screen, Heatstrip-Screen, Load-Screen, Savepoints-Screen und MQTT-Screen durchschalten
 - Doppelklick auf Pfad- oder Heards-Screen: direkt zwischen diesen beiden Screens wechseln
 - Doppelklick auf Heatstrip-Screen: Heatstrip-Snapshot aktualisieren
 - Doppelklick auf Savepoints-Screen: Savepoint speichern
@@ -241,6 +251,11 @@ sp.clear
 Batterie sowie erstem Pfad und erstem Heard-Eintrag aus. `sp.show <id> <page>`
 gibt den Savepoint als rohe CSV-Seite aus. Die CSV-Ausgabe ist wegen der
 CLI-Antwortlaenge paginiert; jede Seite enthaelt bis zu 4 CSV-Zeilen.
+
+Savepoints enthalten zusaetzlich:
+
+- `hist,<minute>,<rx_packets>`: RX-Pakete pro Minute, neueste Minute zuerst
+- `airtime_ms,<minute>,<rx_airtime_ms>`: geschaetzte RX-Airtime pro Minute, neueste Minute zuerst
 
 ## MQTT Fehlerverhalten
 

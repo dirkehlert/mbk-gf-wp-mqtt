@@ -258,6 +258,7 @@ public:
     return &_prefs;
   }
   uint32_t getObserverRxPackets() const { return observer_rx_packets; }
+  uint32_t getObserverRxAirTimeMillis() const { return getReceiveAirTime(); }
   uint32_t getObserverMqttPublished() const { return observer_mqtt_published; }
   const char* getObserverMqttHost() const {
 #ifdef WITH_MQTT_OBSERVER
@@ -302,7 +303,8 @@ public:
 #endif
   void getObserverClockSyncStatus(char* dest, size_t dest_size) const;
 #ifdef ENABLE_OBSERVER_SAVEPOINTS
-  bool createObserverSavepoint(const uint16_t* activity_bins, uint8_t bin_count, uint8_t newest_bin, char* status, size_t status_size);
+  bool createObserverSavepoint(const uint16_t* activity_bins, const uint16_t* airtime_bins, uint8_t bin_count,
+                               uint8_t newest_bin, char* status, size_t status_size);
 #endif
   void resetObserverLiveStats();
   void hibernate();

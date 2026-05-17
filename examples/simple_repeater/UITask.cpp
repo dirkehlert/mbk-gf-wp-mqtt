@@ -46,7 +46,9 @@ void UITask::begin(NodePrefs* node_prefs, const char* build_date, const char* fi
   _prev_mqtt_total = _mesh ? _mesh->getObserverMqttPublished() : 0;
   _render_rx_total = _prev_rx_total;
   _activity_prev_rx_total = _prev_rx_total;
+  _activity_prev_air_ms = _mesh ? _mesh->getObserverRxAirTimeMillis() : 0;
   memset(_activity_bins, 0, sizeof(_activity_bins));
+  memset(_airtime_bins, 0, sizeof(_airtime_bins));
   _activity_bin_index = 0;
   _last_min_rx = 0;
   _last_min_mqtt = 0;
@@ -225,6 +227,17 @@ static void drawHeatCell(DisplayDriver* display, int x, int y, int w, uint8_t po
   }
 }
 
+static void formatLoadPct(char* dest, size_t dest_size, uint16_t pct_x10) {
+  if (!dest || dest_size == 0) return;
+  if (pct_x10 > 999) {
+    snprintf(dest, dest_size, ">99%%");
+  } else if (pct_x10 >= 100) {
+    snprintf(dest, dest_size, "%u%%", (unsigned int)((pct_x10 + 5) / 10));
+  } else {
+    snprintf(dest, dest_size, "%u.%u%%", (unsigned int)(pct_x10 / 10), (unsigned int)(pct_x10 % 10));
+  }
+}
+
 void UITask::updatePathHeatSnapshot() {
   memset(_heat_rows, 0, sizeof(_heat_rows));
   _heat_row_count = 0;
@@ -352,6 +365,7 @@ void UITask::updateRxActivityBins() {
   while ((long)(now - _next_activity_rollover) >= 0) {
     _activity_bin_index = (_activity_bin_index + 1) % RX_ACTIVITY_BINS;
     _activity_bins[_activity_bin_index] = 0;
+    _airtime_bins[_activity_bin_index] = 0;
     _next_activity_rollover += RX_ACTIVITY_BIN_MILLIS;
     changed = true;
   }
@@ -366,11 +380,20 @@ void UITask::updateRxActivityBins() {
     changed = true;
   }
 
+  uint32_t air_ms = _mesh->getObserverRxAirTimeMillis();
+  if (air_ms != _activity_prev_air_ms) {
+    uint32_t delta = air_ms - _activity_prev_air_ms;
+    uint32_t value = (uint32_t)_airtime_bins[_activity_bin_index] + delta;
+    _airtime_bins[_activity_bin_index] = value > UINT16_MAX ? UINT16_MAX : (uint16_t)value;
+    _activity_prev_air_ms = air_ms;
+    changed = true;
+  }
+
   if (changed && (
 #ifdef FIELD_MONITOR_LITE
       _screen == 1 || _screen == 2 || _screen == 3
 #else
-      _screen == 1 || _screen == 2
+      _screen == 1 || _screen == 2 || _screen == 4
 #endif
       )) {
     _next_refresh = 0;
@@ -437,6 +460,70 @@ void UITask::renderRxActivityHistogram() {
   _display->drawTextEllipsized(left, top + RX_ACTIVITY_BINS * row_h + 2, _display->width() - left, label);
 }
 
+void UITask::renderNetworkLoadScreen() {
+  const int left = UI_LEFT_MARGIN;
+  const int chart_top = 42;
+  const int chart_h = 58;
+  const int legend_x = _display->width() - 56;
+  const int chart_w = legend_x - left - 6;
+  const int bar_gap = 2;
+  const int bar_w = (chart_w - (RX_ACTIVITY_BINS - 1) * bar_gap) / RX_ACTIVITY_BINS;
+  uint16_t max_pct_x10 = 1;
+  uint32_t sum_ms = 0;
+
+  for (uint8_t i = 0; i < RX_ACTIVITY_BINS; i++) {
+    uint16_t pct_x10 = (uint16_t)((uint32_t)_airtime_bins[i] * 1000UL / RX_ACTIVITY_BIN_MILLIS);
+    if (pct_x10 > max_pct_x10) max_pct_x10 = pct_x10;
+    sum_ms += _airtime_bins[i];
+  }
+
+  uint16_t now_pct_x10 = (uint16_t)((uint32_t)_airtime_bins[_activity_bin_index] * 1000UL / RX_ACTIVITY_BIN_MILLIS);
+  uint16_t avg_pct_x10 = (uint16_t)(sum_ms * 1000UL / ((uint32_t)RX_ACTIVITY_BIN_MILLIS * RX_ACTIVITY_BINS));
+
+  char now_pct[8];
+  char max_pct[8];
+  char avg_pct[8];
+  formatLoadPct(now_pct, sizeof(now_pct), now_pct_x10);
+  formatLoadPct(max_pct, sizeof(max_pct), max_pct_x10);
+  formatLoadPct(avg_pct, sizeof(avg_pct), avg_pct_x10);
+
+  _display->setTextSize(1);
+  _display->setCursor(left, 0);
+  _display->setColor(DisplayDriver::GREEN);
+  _display->print("Load");
+  renderTopStats();
+
+  _display->setColor(DisplayDriver::LIGHT);
+  char line[48];
+  snprintf(line, sizeof(line), "RX airtime / min");
+  _display->drawTextEllipsized(left, 16, _display->width() - left, line);
+  snprintf(line, sizeof(line), "scale 0-%s", max_pct);
+  _display->drawTextEllipsized(left, 28, legend_x - left - 2, line);
+
+  for (uint8_t i = 0; i < RX_ACTIVITY_BINS; i++) {
+    uint8_t idx = (_activity_bin_index + i + 1) % RX_ACTIVITY_BINS;
+    uint16_t pct_x10 = (uint16_t)((uint32_t)_airtime_bins[idx] * 1000UL / RX_ACTIVITY_BIN_MILLIS);
+    int bar_h = pct_x10 == 0 ? 0 : (int)((uint32_t)pct_x10 * chart_h / max_pct_x10);
+    int x = left + i * (bar_w + bar_gap);
+    if (bar_h > 0) _display->fillRect(x, chart_top + chart_h - bar_h, bar_w, bar_h);
+  }
+  _display->fillRect(left, chart_top + chart_h, chart_w, 1);
+  _display->fillRect(left, chart_top, 1, chart_h + 1);
+
+  _display->setCursor(legend_x, 42);
+  _display->print("Now");
+  _display->setCursor(legend_x, 53);
+  _display->print(now_pct);
+  _display->setCursor(legend_x, 68);
+  _display->print("Max");
+  _display->setCursor(legend_x, 79);
+  _display->print(max_pct);
+  _display->setCursor(legend_x, 94);
+  _display->print("Avg");
+  _display->setCursor(legend_x, 105);
+  _display->print(avg_pct);
+}
+
 void UITask::syncObserverTotalsAfterReset() {
   uint32_t rx_total = _mesh ? _mesh->getObserverRxPackets() : 0;
   uint32_t mqtt_total = _mesh ? _mesh->getObserverMqttPublished() : 0;
@@ -444,6 +531,7 @@ void UITask::syncObserverTotalsAfterReset() {
   _prev_mqtt_total = mqtt_total;
   _render_rx_total = rx_total;
   _activity_prev_rx_total = rx_total;
+  _activity_prev_air_ms = _mesh ? _mesh->getObserverRxAirTimeMillis() : 0;
   _last_min_rx = 0;
   _last_min_mqtt = 0;
   _next_stats_rollover = millis() + STATS_WINDOW_MILLIS;
@@ -676,7 +764,9 @@ void UITask::renderCurrScreen() {
     }
   } else if (_screen == 3) {  // path heat screen
     renderPathHeatScreen();
-  } else if (_screen == 4) {  // savepoints screen
+  } else if (_screen == 4) {  // network load screen
+    renderNetworkLoadScreen();
+  } else if (_screen == 5) {  // savepoints screen
     _display->setTextSize(1);
     _display->setCursor(UI_LEFT_MARGIN, 0);
     _display->setColor(DisplayDriver::GREEN);
@@ -769,8 +859,9 @@ const char* UITask::screenName(uint8_t screen) {
     case 1: return "paths";
     case 2: return "heards";
     case 3: return "heatstrip";
-    case 4: return "savepoints";
-    case 5: return "mqtt";
+    case 4: return "load";
+    case 5: return "savepoints";
+    case 6: return "mqtt";
     default: return "unknown";
   }
 #endif
@@ -819,8 +910,9 @@ void UITask::loop() {
           } else if (_screen == 3) {
             updatePathHeatSnapshot();
             strcpy(_status, "Heat refreshed");
-          } else if (_screen == 4) {
-            _mesh->createObserverSavepoint(_activity_bins, RX_ACTIVITY_BINS, _activity_bin_index, _status, sizeof(_status));
+          } else if (_screen == 5) {
+            _mesh->createObserverSavepoint(_activity_bins, _airtime_bins, RX_ACTIVITY_BINS, _activity_bin_index,
+                                           _status, sizeof(_status));
           } else {
             _mesh->sendSelfAdvertisement(0, false);
             strcpy(_status, "Advert sent");
@@ -836,10 +928,10 @@ void UITask::loop() {
             strcpy(_status, "Flood advert sent");
           }
 #else
-          if (_screen == 5) {
+          if (_screen == 6) {
             bool enabled = _mesh->toggleObserverMqttEnabled();
             strcpy(_status, enabled ? "WiFi/MQTT on" : "WiFi/MQTT off");
-          } else if (_screen == 4) {
+          } else if (_screen == 5) {
             _mesh->resetObserverLiveStats();
             syncObserverTotalsAfterReset();
             strcpy(_status, "Live counters reset");
@@ -932,7 +1024,7 @@ void UITask::loop() {
 #ifdef FIELD_MONITOR_LITE
       _screen == 1 || _screen == 2 || _screen == 3
 #else
-      _screen == 1 || _screen == 2
+      _screen == 1 || _screen == 2 || _screen == 4
 #endif
       )) {
     uint32_t rx_total = _mesh->getObserverRxPackets();
@@ -952,7 +1044,7 @@ void UITask::loop() {
 #ifdef FIELD_MONITOR_LITE
           (_screen == 1 || _screen == 2 || _screen == 3);
 #else
-          (_screen == 1 || _screen == 2);
+          (_screen == 1 || _screen == 2 || _screen == 4);
 #endif
       if (
 #ifndef FIELD_MONITOR_LITE
