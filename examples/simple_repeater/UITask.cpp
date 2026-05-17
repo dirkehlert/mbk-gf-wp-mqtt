@@ -275,7 +275,7 @@ void UITask::renderCurrScreen() {
     _display->print("Paths");
     _display->setColor(DisplayDriver::LIGHT);
     if (_mesh) {
-      _display->drawTextEllipsized(UI_LEFT_MARGIN, 16, _display->width() - UI_LEFT_MARGIN, "Cnt   Age  Path");
+      _display->drawTextEllipsized(UI_LEFT_MARGIN, 16, _display->width() - UI_LEFT_MARGIN, "Cnt Age Path");
       bool any = false;
       for (uint8_t i = 0; i < 8; i++) {
         if (_mesh->getObserverPathLine(i, tmp, sizeof(tmp))) {
@@ -387,7 +387,7 @@ void UITask::renderCurrScreen() {
     _display->setColor(DisplayDriver::LIGHT);
     renderRxActivityChart();
     if (_mesh) {
-      _display->drawTextEllipsized(UI_LEFT_MARGIN, 14, path_width, "Cnt   Age  Path");
+      _display->drawTextEllipsized(UI_LEFT_MARGIN, 14, path_width, "Cnt Age Path");
 
       bool any = false;
       for (uint8_t i = 0; i < 6; i++) {

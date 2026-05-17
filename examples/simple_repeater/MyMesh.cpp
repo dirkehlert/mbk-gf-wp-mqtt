@@ -1222,15 +1222,12 @@ void MyMesh::rememberObserverPath(const mesh::Packet* packet) {
   uint8_t display_hops = min((uint8_t)OBSERVER_PATH_DISPLAY_HOPS, hash_count);
   char text[OBSERVER_PATH_TEXT_SIZE];
   char key[OBSERVER_PATH_KEY_SIZE];
-  int written = snprintf(text, sizeof(text), "%u ", (unsigned int)hash_count);
   int key_written = snprintf(key, sizeof(key), "%u:", (unsigned int)hash_size);
   size_t key_pos = key_written > 0 ? (size_t)key_written : 0;
-  if (written < 0) {
-    text[0] = 0;
-  } else if (hash_count == 0) {
-    snprintf(&text[written], sizeof(text) - written, "-");
+  if (hash_count == 0) {
+    snprintf(text, sizeof(text), "-");
   } else {
-    size_t pos = (size_t)written;
+    size_t pos = 0;
     const char* hex = "0123456789ABCDEF";
     for (uint8_t n = 0; n < display_hops && pos + 2 < sizeof(text); n++) {
       uint8_t i = hash_count - n;
@@ -1367,7 +1364,7 @@ bool MyMesh::getObserverPathLine(uint8_t index, char* dest, size_t dest_size) co
         snprintf(count_col, sizeof(count_col), "%u", (unsigned int)item.count);
       }
       formatAge(age_col, sizeof(age_col), age_secs);
-      snprintf(dest, dest_size, "%-5s %-4s %s", count_col, age_col, item.text);
+      snprintf(dest, dest_size, "%s %s %s", count_col, age_col, item.text);
       return true;
     }
     found++;
