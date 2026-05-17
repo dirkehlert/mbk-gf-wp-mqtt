@@ -205,6 +205,26 @@ static bool uiNextToken(char*& cursor, char* dest, size_t dest_size) {
   return pos > 0;
 }
 
+static void drawHeatCell(DisplayDriver* display, int x, int y, int w, uint8_t position) {
+  if (!display) return;
+
+  switch (position) {
+    case 1:  // last / nearest rep: darkest
+      display->fillRect(x, y + 2, w, 6);
+      break;
+    case 2:  // previous rep: medium density
+      display->fillRect(x, y + 2, w, 2);
+      display->fillRect(x, y + 6, w, 2);
+      break;
+    case 3:  // pre-previous rep: light density
+      display->fillRect(x, y + 4, w, 2);
+      break;
+    default:
+      display->fillRect(x + 3, y + 4, 2, 2);
+      break;
+  }
+}
+
 void UITask::updatePathHeatSnapshot() {
   memset(_heat_rows, 0, sizeof(_heat_rows));
   _heat_row_count = 0;
@@ -239,6 +259,7 @@ void UITask::updatePathHeatSnapshot() {
     snprintf(path_copy, sizeof(path_copy), "%s", path);
     char* path_cursor = path_copy;
     char rep[8];
+    uint8_t position = 1;
     while (uiNextToken(path_cursor, rep, sizeof(rep))) {
       int row = -1;
       for (uint8_t r = 0; r < _heat_row_count; r++) {
@@ -251,7 +272,11 @@ void UITask::updatePathHeatSnapshot() {
         row = _heat_row_count++;
         snprintf(_heat_rows[row].rep, sizeof(_heat_rows[row].rep), "%s", rep);
       }
-      if (row >= 0) _heat_rows[row].mask |= (uint16_t)(1U << path_count);
+      if (row >= 0) {
+        _heat_rows[row].mask |= (uint16_t)(1U << path_count);
+        _heat_rows[row].position[path_count] = position;
+      }
+      if (position < 3) position++;
     }
 
     path_count++;
@@ -286,7 +311,11 @@ void UITask::renderPathHeatScreen() {
   _display->setColor(DisplayDriver::LIGHT);
   if (!_heat_valid) updatePathHeatSnapshot();
 
-  _display->drawTextEllipsized(UI_LEFT_MARGIN, 16, _display->width() - UI_LEFT_MARGIN, "   Rep  Paths        PC");
+  const int pc_right = _display->width() - UI_LEFT_MARGIN;
+  int pc_header_width = _display->getTextWidth("PC");
+  _display->drawTextEllipsized(UI_LEFT_MARGIN, 16, _display->width() - UI_LEFT_MARGIN, "   Rep  Paths");
+  _display->setCursor(pc_right - pc_header_width, 16);
+  _display->print("PC");
   if (_heat_row_count == 0) {
     _display->drawTextEllipsized(UI_LEFT_MARGIN, 34, _display->width() - UI_LEFT_MARGIN, "Double: refresh");
     return;
@@ -296,7 +325,6 @@ void UITask::renderPathHeatScreen() {
   const int block_x = UI_LEFT_MARGIN + 44;
   const int block_w = 8;
   const int block_gap = 3;
-  const int pc_x = _display->width() - 18;
   for (uint8_t r = 0; r < _heat_row_count; r++) {
     int y = 28 + r * 11;
     int rep_width = _display->getTextWidth(_heat_rows[r].rep);
@@ -304,16 +332,12 @@ void UITask::renderPathHeatScreen() {
     _display->print(_heat_rows[r].rep);
     for (uint8_t p = 0; p < HEAT_PATHS; p++) {
       int x = block_x + p * (block_w + block_gap);
-      if (_heat_rows[r].mask & (1U << p)) {
-        _display->fillRect(x, y + 2, block_w, 6);
-      } else {
-        _display->fillRect(x + 3, y + 4, 2, 2);
-      }
+      drawHeatCell(_display, x, y, block_w, _heat_rows[r].position[p]);
     }
     char pc[4];
     snprintf(pc, sizeof(pc), "%u", (unsigned int)_heat_rows[r].pc);
     int pc_width = _display->getTextWidth(pc);
-    _display->setCursor(pc_x - pc_width, y);
+    _display->setCursor(pc_right - pc_width, y);
     _display->print(pc);
   }
 }

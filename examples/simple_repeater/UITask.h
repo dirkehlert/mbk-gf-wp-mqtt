@@ -16,6 +16,7 @@ class UITask {
   struct HeatRow {
     char rep[7];
     uint16_t mask;
+    uint8_t position[HEAT_PATHS];
     uint8_t pc;
   };
 

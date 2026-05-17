@@ -127,9 +127,9 @@ Screen-Galerie:
 | --- | --- | --- |
 | ![Status](docs/screens/00-status.png) | ![Paths](docs/screens/01-paths.png) | ![Heards](docs/screens/02-heards.png) |
 
-| Savepoints | MQTT |
-| --- | --- |
-| ![Savepoints](docs/screens/03-savepoints.png) | ![MQTT](docs/screens/04-mqtt.png) |
+| Heatstrip | Savepoints | MQTT |
+| --- | --- | --- |
+| ![Heatstrip](docs/screens/03-heatstrip.png) | ![Savepoints](docs/screens/04-savepoints.png) | ![MQTT](docs/screens/05-mqtt.png) |
 
 Status-Screen:
 
@@ -142,11 +142,12 @@ Status-Screen:
 
 Pfad-Screen:
 
-- Pfade der in den letzten 60 Sekunden empfangenen Pakete
-- Neueste Pakete zuerst
-- Pfad-Hashes umgekehrt dargestellt, damit der naehere/lokale Teil links steht
-- Anzeige zeigt aus Platzgruenden die letzten 3 Hops, gezaehlt wird intern aber nach vollstaendigem Pfad
-- Pfadhistorie speichert bis zu 24 unterschiedliche Pfade
+- haeufigste Pfad-Triples seit Start
+- `cnt` zaehlt Treffer fuer das sichtbare Triple
+- `age` zeigt, wann dieses Triple zuletzt gehoert wurde
+- Anzeige zeigt aus Platzgruenden maximal die letzten 3 Hops
+- Pfad-Hashes sind umgekehrt dargestellt, damit der naehere/lokale Teil links steht
+- Pfadhistorie speichert bis zu 24 unterschiedliche Triple-Eintraege
 - Rechts ein Aktivitaetsbalken fuer RX-Pakete der letzten 12 Minuten mit einem Balken pro Minute
 
 MQTT-Screen:
@@ -162,7 +163,18 @@ Heards-Screen:
 - Last Heard als Alter in Sekunden
 - maximale SNR seit Start fuer diesen Hop
 - letzte SNR fuer diesen Hop
+- `PC` zeigt, in wie vielen aktuellen Pfad-Triples dieser Repeater vorkommt
 - rechts derselbe RX-Aktivitaetsbalken wie auf dem Pfad-Screen
+
+Heatstrip-Screen:
+
+- grafische Repeater/Pfad-Matrix
+- Spalten sind die Top-Pfad-Triples, Zeilen sind Repeater
+- markierte Zellen bedeuten, dass der Repeater am jeweiligen Triple beteiligt ist
+- Graustufen kodieren die Position im Triple: dunkel = letzter/naechster Rep, mittel = vorletzter Rep, hell = vorvorletzter Rep
+- Punkt bedeutet, dass der Repeater in diesem Triple nicht enthalten ist
+- `PC` rechts zeigt, in wie vielen Pfad-Triples dieser Repeater vorkommt
+- Snapshot wird beim Betreten aufgebaut und danach nur per Doppelklick auf diesem Screen aktualisiert
 
 Savepoints-Screen:
 
@@ -200,8 +212,9 @@ Danach die Werte in `platformio.local.ini` anpassen. Diese Datei ist in
 
 ## Tastenbedienung
 
-- Kurzer Klick: Status-Screen, Pfad-Screen, Heards-Screen, Savepoints-Screen und MQTT-Screen durchschalten
+- Kurzer Klick: Status-Screen, Pfad-Screen, Heards-Screen, Heatstrip-Screen, Savepoints-Screen und MQTT-Screen durchschalten
 - Doppelklick auf Pfad- oder Heards-Screen: direkt zwischen diesen beiden Screens wechseln
+- Doppelklick auf Heatstrip-Screen: Heatstrip-Snapshot aktualisieren
 - Doppelklick auf Savepoints-Screen: Savepoint speichern
 - Doppelklick auf anderen Screens: Zero-Hop Advert senden
 - Langer Druck auf Status-Screen: Flood-Advert senden
