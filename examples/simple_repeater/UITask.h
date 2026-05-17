@@ -10,6 +10,14 @@ class MyMesh;
 class UITask {
   static const uint8_t RX_ACTIVITY_BINS = 12;
   static const unsigned long RX_ACTIVITY_BIN_MILLIS = 60000;
+  static const uint8_t HEAT_ROWS = 7;
+  static const uint8_t HEAT_PATHS = 8;
+
+  struct HeatRow {
+    char rep[7];
+    uint16_t mask;
+    uint8_t pc;
+  };
 
   DisplayDriver* _display;
   unsigned long _next_read, _next_refresh, _auto_off;
@@ -29,6 +37,9 @@ class UITask {
   uint16_t _activity_bins[RX_ACTIVITY_BINS];
   uint8_t _activity_bin_index;
   unsigned long _next_activity_rollover;
+  HeatRow _heat_rows[HEAT_ROWS];
+  uint8_t _heat_row_count;
+  bool _heat_valid;
   uint8_t _screen;
   bool _dump_mode;
 
@@ -38,6 +49,8 @@ class UITask {
   void updateRxActivityBins();
   void renderRxActivityChart();
   void renderRxActivityHistogram();
+  void updatePathHeatSnapshot();
+  void renderPathHeatScreen();
   void syncObserverTotalsAfterReset();
 public:
   UITask(DisplayDriver& display) : _display(&display) {
@@ -46,12 +59,21 @@ public:
     _activity_prev_rx_total = 0;
     _activity_bin_index = 0;
     memset(_activity_bins, 0, sizeof(_activity_bins));
+    memset(_heat_rows, 0, sizeof(_heat_rows));
+    _heat_row_count = 0;
+    _heat_valid = false;
     _screen = 0;
     _dump_mode = false;
   }
   void begin(NodePrefs* node_prefs, const char* build_date, const char* firmware_version, MyMesh* mesh = nullptr);
+  static uint8_t screenCount() {
+#ifdef FIELD_MONITOR_LITE
+    return 5;
+#else
+    return 6;
+#endif
+  }
 #ifdef ENABLE_DISPLAY_DUMP
-  static uint8_t screenCount() { return 5; }
   static const char* screenName(uint8_t screen);
   bool renderScreenForDump(uint8_t screen);
 #endif

@@ -7,7 +7,7 @@ from pathlib import Path
 
 import serial
 
-SCREEN_NAMES = ["status", "paths", "heards", "savepoints", "mqtt"]
+SCREEN_NAMES = ["status", "paths", "heards", "heatstrip", "savepoints", "mqtt"]
 
 
 def parse_pbm(text):

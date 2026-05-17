@@ -1360,6 +1360,21 @@ static void formatAge(char* dest, size_t dest_size, unsigned long age_secs) {
   }
 }
 
+static bool observerPathContainsToken(const char* path_text, const char* token) {
+  if (!path_text || !token || token[0] == 0) return false;
+  size_t token_len = strlen(token);
+  const char* p = path_text;
+  while (*p) {
+    while (*p == ' ') p++;
+    const char* start = p;
+    while (*p && *p != ' ') p++;
+    if ((size_t)(p - start) == token_len && strncmp(start, token, token_len) == 0) {
+      return true;
+    }
+  }
+  return false;
+}
+
 static bool readLine(File& file, char* dest, size_t dest_size) {
   if (!dest || dest_size == 0 || !file.available()) return false;
   size_t pos = 0;
@@ -1544,17 +1559,7 @@ bool MyMesh::getObserverLastHopLine(uint8_t index, char* dest, size_t dest_size)
       for (uint8_t k = 0; k < OBSERVER_PATH_HISTORY_SIZE; k++) {
         const ObserverPathInfo& path = observer_paths[k];
         if (path.seen_at == 0) continue;
-
-        char path_text[OBSERVER_PATH_TEXT_SIZE];
-        StrHelper::strncpy(path_text, path.text, sizeof(path_text));
-        char* token = strtok(path_text, " ");
-        while (token) {
-          if (strcmp(token, item.text) == 0) {
-            path_count++;
-            break;
-          }
-          token = strtok(NULL, " ");
-        }
+        if (observerPathContainsToken(path.text, item.text)) path_count++;
       }
       snprintf(dest, dest_size, "%6s %4s %6s %6s %2u", item.text, age_col, max_col, last_col,
                (unsigned int)path_count);

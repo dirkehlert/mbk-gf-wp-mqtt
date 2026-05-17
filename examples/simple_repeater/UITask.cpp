@@ -171,6 +171,153 @@ static void drawRightMetricRow(DisplayDriver* display, int x, int y, int width, 
   display->print(metric);
 }
 
+static bool uiTokenLooksLikeAge(const char* token) {
+  if (!token || !token[0]) return false;
+  size_t len = strlen(token);
+  if (strcmp(token, ">999") == 0) return true;
+  return len >= 2 && (token[len - 1] == 's' || token[len - 1] == 'm');
+}
+
+static bool uiPathContainsRep(const char* path_text, const char* rep) {
+  if (!path_text || !rep || rep[0] == 0) return false;
+  size_t rep_len = strlen(rep);
+  const char* p = path_text;
+  while (*p) {
+    while (*p == ' ') p++;
+    const char* start = p;
+    while (*p && *p != ' ') p++;
+    if ((size_t)(p - start) == rep_len && strncmp(start, rep, rep_len) == 0) return true;
+  }
+  return false;
+}
+
+static bool uiNextToken(char*& cursor, char* dest, size_t dest_size) {
+  if (!cursor || !dest || dest_size == 0) return false;
+  while (*cursor == ' ') cursor++;
+  if (*cursor == 0) return false;
+
+  size_t pos = 0;
+  while (*cursor && *cursor != ' ') {
+    if (pos + 1 < dest_size) dest[pos++] = *cursor;
+    cursor++;
+  }
+  dest[pos] = 0;
+  return pos > 0;
+}
+
+void UITask::updatePathHeatSnapshot() {
+  memset(_heat_rows, 0, sizeof(_heat_rows));
+  _heat_row_count = 0;
+  _heat_valid = true;
+  if (!_mesh) return;
+
+  char line[80];
+  char path_text[HEAT_PATHS][32];
+  uint8_t path_count = 0;
+  memset(path_text, 0, sizeof(path_text));
+
+  for (uint8_t i = 0; i < HEAT_PATHS; i++) {
+    if (!_mesh->getObserverPathLine(i, line, sizeof(line))) continue;
+
+    char work[80];
+    snprintf(work, sizeof(work), "%s", line);
+    char* cursor = work;
+    char token[12];
+    if (!uiNextToken(cursor, token, sizeof(token))) continue;  // count
+    char path[32] = "";
+    while (uiNextToken(cursor, token, sizeof(token))) {
+      if (uiTokenLooksLikeAge(token)) break;
+      if (strcmp(token, "-") != 0) {
+        if (path[0]) strncat(path, " ", sizeof(path) - strlen(path) - 1);
+        strncat(path, token, sizeof(path) - strlen(path) - 1);
+      }
+    }
+    if (!path[0]) continue;
+    snprintf(path_text[path_count], sizeof(path_text[path_count]), "%s", path);
+
+    char path_copy[32];
+    snprintf(path_copy, sizeof(path_copy), "%s", path);
+    char* path_cursor = path_copy;
+    char rep[8];
+    while (uiNextToken(path_cursor, rep, sizeof(rep))) {
+      int row = -1;
+      for (uint8_t r = 0; r < _heat_row_count; r++) {
+        if (strcmp(_heat_rows[r].rep, rep) == 0) {
+          row = r;
+          break;
+        }
+      }
+      if (row < 0 && _heat_row_count < HEAT_ROWS) {
+        row = _heat_row_count++;
+        snprintf(_heat_rows[row].rep, sizeof(_heat_rows[row].rep), "%s", rep);
+      }
+      if (row >= 0) _heat_rows[row].mask |= (uint16_t)(1U << path_count);
+    }
+
+    path_count++;
+  }
+
+  for (uint8_t r = 0; r < _heat_row_count; r++) {
+    uint8_t pc = 0;
+    for (uint8_t p = 0; p < path_count; p++) {
+      if (uiPathContainsRep(path_text[p], _heat_rows[r].rep)) pc++;
+    }
+    _heat_rows[r].pc = pc;
+  }
+
+  for (uint8_t i = 0; i < _heat_row_count; i++) {
+    for (uint8_t j = i + 1; j < _heat_row_count; j++) {
+      if (_heat_rows[j].pc > _heat_rows[i].pc) {
+        HeatRow tmp = _heat_rows[i];
+        _heat_rows[i] = _heat_rows[j];
+        _heat_rows[j] = tmp;
+      }
+    }
+  }
+}
+
+void UITask::renderPathHeatScreen() {
+  _display->setTextSize(1);
+  _display->setCursor(UI_LEFT_MARGIN, 0);
+  _display->setColor(DisplayDriver::GREEN);
+  _display->print("Heatstrip");
+  renderTopStats();
+
+  _display->setColor(DisplayDriver::LIGHT);
+  if (!_heat_valid) updatePathHeatSnapshot();
+
+  _display->drawTextEllipsized(UI_LEFT_MARGIN, 16, _display->width() - UI_LEFT_MARGIN, "   Rep  Paths        PC");
+  if (_heat_row_count == 0) {
+    _display->drawTextEllipsized(UI_LEFT_MARGIN, 34, _display->width() - UI_LEFT_MARGIN, "Double: refresh");
+    return;
+  }
+
+  const int rep_x = UI_LEFT_MARGIN;
+  const int block_x = UI_LEFT_MARGIN + 44;
+  const int block_w = 8;
+  const int block_gap = 3;
+  const int pc_x = _display->width() - 18;
+  for (uint8_t r = 0; r < _heat_row_count; r++) {
+    int y = 28 + r * 11;
+    int rep_width = _display->getTextWidth(_heat_rows[r].rep);
+    _display->setCursor(rep_x + 36 - rep_width, y);
+    _display->print(_heat_rows[r].rep);
+    for (uint8_t p = 0; p < HEAT_PATHS; p++) {
+      int x = block_x + p * (block_w + block_gap);
+      if (_heat_rows[r].mask & (1U << p)) {
+        _display->fillRect(x, y + 2, block_w, 6);
+      } else {
+        _display->fillRect(x + 3, y + 4, 2, 2);
+      }
+    }
+    char pc[4];
+    snprintf(pc, sizeof(pc), "%u", (unsigned int)_heat_rows[r].pc);
+    int pc_width = _display->getTextWidth(pc);
+    _display->setCursor(pc_x - pc_width, y);
+    _display->print(pc);
+  }
+}
+
 void UITask::updateRxActivityBins() {
   if (!_mesh) {
     return;
@@ -503,7 +650,9 @@ void UITask::renderCurrScreen() {
         _display->drawTextEllipsized(UI_LEFT_MARGIN, 30, table_width, "No RX hops");
       }
     }
-  } else if (_screen == 3) {  // savepoints screen
+  } else if (_screen == 3) {  // path heat screen
+    renderPathHeatScreen();
+  } else if (_screen == 4) {  // savepoints screen
     _display->setTextSize(1);
     _display->setCursor(UI_LEFT_MARGIN, 0);
     _display->setColor(DisplayDriver::GREEN);
@@ -595,8 +744,9 @@ const char* UITask::screenName(uint8_t screen) {
     case 0: return "status";
     case 1: return "paths";
     case 2: return "heards";
-    case 3: return "savepoints";
-    case 4: return "mqtt";
+    case 3: return "heatstrip";
+    case 4: return "savepoints";
+    case 5: return "mqtt";
     default: return "unknown";
   }
 #endif
@@ -627,7 +777,7 @@ void UITask::loop() {
 
       if (_mesh) {
         if (ev == BUTTON_EVENT_CLICK) {
-          _screen = (_screen + 1) % 5;
+          _screen = (_screen + 1) % screenCount();
           _status[0] = 0;
         } else if (ev == BUTTON_EVENT_DOUBLE_CLICK) {
 #ifdef FIELD_MONITOR_LITE
@@ -643,6 +793,9 @@ void UITask::loop() {
             _screen = _screen == 1 ? 2 : 1;
             _status[0] = 0;
           } else if (_screen == 3) {
+            updatePathHeatSnapshot();
+            strcpy(_status, "Heat refreshed");
+          } else if (_screen == 4) {
             _mesh->createObserverSavepoint(_activity_bins, RX_ACTIVITY_BINS, _activity_bin_index, _status, sizeof(_status));
           } else {
             _mesh->sendSelfAdvertisement(0, false);
@@ -659,10 +812,10 @@ void UITask::loop() {
             strcpy(_status, "Flood advert sent");
           }
 #else
-          if (_screen == 4) {
+          if (_screen == 5) {
             bool enabled = _mesh->toggleObserverMqttEnabled();
             strcpy(_status, enabled ? "WiFi/MQTT on" : "WiFi/MQTT off");
-          } else if (_screen == 3) {
+          } else if (_screen == 4) {
             _mesh->resetObserverLiveStats();
             syncObserverTotalsAfterReset();
             strcpy(_status, "Live counters reset");
@@ -707,7 +860,7 @@ void UITask::loop() {
 
       if (_mesh) {
         if (ev2 == BUTTON_EVENT_CLICK) {
-          _screen = (_screen + 4) % 5;
+          _screen = (_screen + screenCount() - 1) % screenCount();
           _status[0] = 0;
         } else if (ev2 == BUTTON_EVENT_DOUBLE_CLICK) {
           if (_screen == 1 || _screen == 2) {
@@ -740,7 +893,15 @@ void UITask::loop() {
     _prev_rx_total = rx_total;
     _prev_mqtt_total = mqtt_total;
     _next_stats_rollover = millis() + STATS_WINDOW_MILLIS;
-    _next_refresh = 0;
+    if (
+#ifndef FIELD_MONITOR_LITE
+        _screen != 3
+#else
+        true
+#endif
+        ) {
+      _next_refresh = 0;
+    }
   }
 
   if (_mesh && (
@@ -769,7 +930,17 @@ void UITask::loop() {
 #else
           (_screen == 1 || _screen == 2);
 #endif
-      _next_refresh = millis() + (slow_screen ? 60000 : 1000);
+      if (
+#ifndef FIELD_MONITOR_LITE
+          _screen == 3
+#else
+          false
+#endif
+          ) {
+        _next_refresh = millis() + 3600000UL;
+      } else {
+        _next_refresh = millis() + (slow_screen ? 60000 : 1000);
+      }
       if (slow_screen) {
         _auto_off = _next_refresh + 5000;
       }
