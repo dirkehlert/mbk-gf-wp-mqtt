@@ -107,6 +107,70 @@ void UITask::renderTopStats(int y) {
   }
 }
 
+static void drawPathRow(DisplayDriver* display, int x, int y, int width, const char* line) {
+  if (!display || !line || width <= 0) return;
+
+  char buf[64];
+  snprintf(buf, sizeof(buf), "%s", line);
+
+  char* count = buf;
+  while (*count == ' ') count++;
+  char* path = strchr(count, ' ');
+  if (!path) {
+    display->drawTextEllipsized(x, y, width, line);
+    return;
+  }
+  *path++ = 0;
+  while (*path == ' ') path++;
+
+  char* age = strrchr(path, ' ');
+  if (!age) {
+    display->drawTextEllipsized(x, y, width, line);
+    return;
+  }
+  *age++ = 0;
+  while (*age == ' ') age++;
+
+  int age_width = display->getTextWidth(age);
+  int age_x = x + width - age_width;
+  int count_width = display->getTextWidth("999");
+  int count_x = x + count_width - display->getTextWidth(count);
+  int path_x = x + count_width + 6;
+  int path_width = age_x - path_x - 4;
+
+  display->setCursor(count_x, y);
+  display->print(count);
+  if (path_width > 8) display->drawTextEllipsized(path_x, y, path_width, path);
+  display->setCursor(age_x, y);
+  display->print(age);
+}
+
+static void drawRightMetricRow(DisplayDriver* display, int x, int y, int width, const char* line) {
+  if (!display || !line || width <= 0) return;
+
+  char buf[64];
+  snprintf(buf, sizeof(buf), "%s", line);
+  char* metric = strrchr(buf, ' ');
+  if (!metric) {
+    display->drawTextEllipsized(x, y, width, line);
+    return;
+  }
+  *metric++ = 0;
+  while (*metric == ' ') metric++;
+
+  size_t len = strlen(buf);
+  while (len > 0 && buf[len - 1] == ' ') {
+    buf[--len] = 0;
+  }
+
+  int metric_width = display->getTextWidth(metric);
+  int metric_x = x + width - metric_width;
+  int left_width = metric_x - x - 4;
+  if (left_width > 8) display->drawTextEllipsized(x, y, left_width, buf);
+  display->setCursor(metric_x, y);
+  display->print(metric);
+}
+
 void UITask::updateRxActivityBins() {
   if (!_mesh) {
     return;
@@ -164,6 +228,7 @@ void UITask::renderRxActivityChart() {
       _display->fillRect(chart_x, y, bar_w, PATH_CHART_ROW_H - 2);
     }
   }
+  _display->fillRect(chart_x, PATH_CHART_TOP, 1, RX_ACTIVITY_BINS * PATH_CHART_ROW_H - 2);
 
   char label[8];
   if (max_count > 999) {
@@ -194,6 +259,7 @@ void UITask::renderRxActivityHistogram() {
     int bar_w = value == 0 ? 0 : (int)((uint32_t)value * bar_w_max / max_count);
     if (bar_w > 0) _display->fillRect(left, y, bar_w, row_h - 2);
   }
+  _display->fillRect(left, top, 1, RX_ACTIVITY_BINS * row_h - 2);
 
   char label[24];
   snprintf(label, sizeof(label), "range 0-%u / min", (unsigned int)max_count);
@@ -275,7 +341,7 @@ void UITask::renderCurrScreen() {
     _display->print("Paths");
     _display->setColor(DisplayDriver::LIGHT);
     if (_mesh) {
-      _display->drawTextEllipsized(UI_LEFT_MARGIN, 16, _display->width() - UI_LEFT_MARGIN, "Cnt Age Path");
+      _display->drawTextEllipsized(UI_LEFT_MARGIN, 16, _display->width() - UI_LEFT_MARGIN, "Cnt Path Age");
       bool any = false;
       for (uint8_t i = 0; i < 8; i++) {
         if (_mesh->getObserverPathLine(i, tmp, sizeof(tmp))) {
@@ -292,11 +358,11 @@ void UITask::renderCurrScreen() {
     _display->print("Heards");
     _display->setColor(DisplayDriver::LIGHT);
     if (_mesh) {
-      _display->drawTextEllipsized(UI_LEFT_MARGIN, 16, _display->width() - UI_LEFT_MARGIN, "Hop    Age   Max   Last");
+      drawRightMetricRow(_display, UI_LEFT_MARGIN, 16, _display->width() - UI_LEFT_MARGIN, "   Rep  Age    Max   Last PC");
       bool any = false;
       for (uint8_t i = 0; i < 8; i++) {
         if (_mesh->getObserverLastHopLine(i, tmp, sizeof(tmp))) {
-          _display->drawTextEllipsized(UI_LEFT_MARGIN, 28 + i * 11, _display->width() - UI_LEFT_MARGIN, tmp);
+          drawRightMetricRow(_display, UI_LEFT_MARGIN, 28 + i * 11, _display->width() - UI_LEFT_MARGIN, tmp);
           any = true;
         }
       }
@@ -387,12 +453,12 @@ void UITask::renderCurrScreen() {
     _display->setColor(DisplayDriver::LIGHT);
     renderRxActivityChart();
     if (_mesh) {
-      _display->drawTextEllipsized(UI_LEFT_MARGIN, 14, path_width, "Cnt Age Path");
+      drawPathRow(_display, UI_LEFT_MARGIN, 14, path_width, "Cnt Path Age");
 
       bool any = false;
       for (uint8_t i = 0; i < 6; i++) {
         if (_mesh->getObserverPathLine(i, tmp, sizeof(tmp))) {
-          _display->drawTextEllipsized(UI_LEFT_MARGIN, 26 + i * 11, path_width, tmp);
+          drawPathRow(_display, UI_LEFT_MARGIN, 26 + i * 11, path_width, tmp);
           any = true;
         }
       }
@@ -420,13 +486,13 @@ void UITask::renderCurrScreen() {
       if (_status[0] && millis() < _status_until) {
         _display->drawTextEllipsized(UI_LEFT_MARGIN, 16, table_width, _status);
       } else {
-        _display->drawTextEllipsized(UI_LEFT_MARGIN, 16, table_width, "Hop    Age   Max   Last");
+        drawRightMetricRow(_display, UI_LEFT_MARGIN, 16, table_width, "   Rep  Age    Max   Last PC");
       }
 
       bool any = false;
       for (uint8_t i = 0; i < 8; i++) {
         if (_mesh->getObserverLastHopLine(i, tmp, sizeof(tmp))) {
-          _display->drawTextEllipsized(UI_LEFT_MARGIN, 28 + i * 11, table_width, tmp);
+          drawRightMetricRow(_display, UI_LEFT_MARGIN, 28 + i * 11, table_width, tmp);
           any = true;
         }
       }

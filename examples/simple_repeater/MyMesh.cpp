@@ -1238,18 +1238,17 @@ void MyMesh::rememberObserverPath(const mesh::Packet* packet) {
         text[pos++] = hex[hash[j] & 0x0F];
       }
     }
-    if (hash_count > display_hops && pos + 2 < sizeof(text)) {
-      text[pos++] = ' ';
-      text[pos++] = '+';
-    }
     text[pos] = 0;
   }
 
   const char* hex = "0123456789ABCDEF";
-  uint16_t path_bytes = min((uint16_t)(hash_count * hash_size), (uint16_t)MAX_PATH_SIZE);
-  for (uint16_t i = 0; i < path_bytes && key_pos + 2 < sizeof(key); i++) {
-    key[key_pos++] = hex[packet->path[i] >> 4];
-    key[key_pos++] = hex[packet->path[i] & 0x0F];
+  for (uint8_t n = 0; n < display_hops && key_pos + 2 < sizeof(key); n++) {
+    uint8_t i = hash_count - n;
+    const uint8_t* hash = &packet->path[(i - 1) * hash_size];
+    for (uint8_t j = 0; j < hash_size && key_pos + 2 < sizeof(key); j++) {
+      key[key_pos++] = hex[hash[j] >> 4];
+      key[key_pos++] = hex[hash[j] & 0x0F];
+    }
   }
   key[key_pos] = 0;
 
@@ -1364,7 +1363,7 @@ bool MyMesh::getObserverPathLine(uint8_t index, char* dest, size_t dest_size) co
         snprintf(count_col, sizeof(count_col), "%u", (unsigned int)item.count);
       }
       formatAge(age_col, sizeof(age_col), age_secs);
-      snprintf(dest, dest_size, "%s %s %s", count_col, age_col, item.text);
+      snprintf(dest, dest_size, "%3s %s %s", count_col, item.text, age_col);
       return true;
     }
     found++;
@@ -1484,11 +1483,28 @@ bool MyMesh::getObserverLastHopLine(uint8_t index, char* dest, size_t dest_size)
       char age_col[5];
       char max_col[8];
       char last_col[8];
+      uint8_t path_count = 0;
       unsigned long age_secs = (now - item.seen_at) / 1000;
       formatAge(age_col, sizeof(age_col), age_secs);
       formatSnrX4(max_col, sizeof(max_col), item.max_snr);
       formatSnrX4(last_col, sizeof(last_col), item.last_snr);
-      snprintf(dest, dest_size, "%-6s %-4s %6s %6s", item.text, age_col, max_col, last_col);
+      for (uint8_t k = 0; k < OBSERVER_PATH_HISTORY_SIZE; k++) {
+        const ObserverPathInfo& path = observer_paths[k];
+        if (path.seen_at == 0) continue;
+
+        char path_text[OBSERVER_PATH_TEXT_SIZE];
+        StrHelper::strncpy(path_text, path.text, sizeof(path_text));
+        char* token = strtok(path_text, " ");
+        while (token) {
+          if (strcmp(token, item.text) == 0) {
+            path_count++;
+            break;
+          }
+          token = strtok(NULL, " ");
+        }
+      }
+      snprintf(dest, dest_size, "%6s %4s %6s %6s %2u", item.text, age_col, max_col, last_col,
+               (unsigned int)path_count);
       return true;
     }
     found++;
