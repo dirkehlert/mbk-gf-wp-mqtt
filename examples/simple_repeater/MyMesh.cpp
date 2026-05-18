@@ -6,6 +6,11 @@
 #include <esp_attr.h>
 #include <driver/rtc_io.h>
 #endif
+#if defined(ENABLE_OBSERVER_WEB_AP) && defined(ESP32)
+#include <WiFi.h>
+#include <AsyncTCP.h>
+#include <ESPAsyncWebServer.h>
+#endif
 
 /* ------------------------------ Config -------------------------------- */
 
@@ -65,6 +70,12 @@
 #endif
 #ifndef MQTT_OBSERVER_WIFI_PASSWORD
   #define MQTT_OBSERVER_WIFI_PASSWORD ""
+#endif
+#ifndef OBSERVER_WEB_AP_SSID
+  #define OBSERVER_WEB_AP_SSID "MBK-GF-WP"
+#endif
+#ifndef OBSERVER_WEB_AP_PASSWORD
+  #define OBSERVER_WEB_AP_PASSWORD "observer2026"
 #endif
 
 #ifndef SERVER_RESPONSE_DELAY
@@ -133,6 +144,154 @@ static const char* observerResetReasonString(esp_reset_reason_t reason) {
 }
 #endif
 #define CLOCK_SYNC_MAX_TIME      2051222400UL  // 2035-01-01T00:00:00Z
+
+#if defined(ENABLE_OBSERVER_WEB_AP) && defined(ESP32)
+static const char OBSERVER_WEB_HTML[] PROGMEM = R"HTML(
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>MBK GF WP</title>
+<style>
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;margin:0;background:#f5f5f2;color:#111}
+main{max-width:720px;margin:0 auto;padding:18px}
+h1{font-size:24px;margin:8px 0 2px}
+h2{font-size:16px;margin:22px 0 8px}
+.muted{color:#555;font-size:13px}
+.panel{background:#fff;border:1px solid #ddd;border-radius:8px;padding:14px;margin-top:12px}
+button,a.btn{display:inline-block;border:1px solid #111;background:#111;color:#fff;border-radius:6px;padding:10px 12px;margin:4px 4px 4px 0;text-decoration:none;font-size:15px}
+button.secondary,a.secondary{background:#fff;color:#111}
+input{font:inherit;padding:9px;border:1px solid #aaa;border-radius:6px;width:100%;box-sizing:border-box;margin:4px 0 8px}
+table{width:100%;border-collapse:collapse;font-size:14px}
+td,th{border-bottom:1px solid #e4e4e0;padding:8px 4px;text-align:left}
+canvas{display:block;width:100%;height:148px}
+.load-row{display:grid;grid-template-columns:minmax(0,1fr) 76px;gap:10px;align-items:start}
+.load-side{font-size:12px;line-height:1.25;color:#222}
+.load-side b{display:block;font-size:15px;margin:1px 0 7px;text-align:right}
+.load-side span{display:block;text-align:right}
+.ok{color:#0a7a29}.err{color:#a40000}
+</style>
+</head>
+<body><main>
+<h1>WP Field Monitor</h1>
+<div class="muted" id="status">loading...</div>
+<div class="muted" id="status2"></div>
+
+<section class="panel">
+<h2>Load</h2>
+<div class="load-row">
+<canvas id="load"></canvas>
+<div class="load-side">
+<span>Scale</span><b id="loadScale">-</b>
+<span>Now</span><b id="loadNow">-</b>
+<span>Avg</span><b id="loadAvg">-</b>
+</div>
+</div>
+<div class="muted" id="loadLegend"></div>
+</section>
+
+<section class="panel">
+<h2>Heatstrip</h2>
+<div id="heat"></div>
+</section>
+
+<section class="panel">
+<h2>Time</h2>
+<button onclick="setTime()">Set from this device</button>
+<div class="muted" id="time"></div>
+</section>
+
+<section class="panel">
+<h2>Position</h2>
+<button onclick="setPosition()">Use this device position</button>
+<input id="lat" placeholder="Latitude">
+<input id="lon" placeholder="Longitude">
+<button class="secondary" onclick="savePosition()">Save entered position</button>
+<div class="muted" id="pos"></div>
+</section>
+
+<section class="panel">
+<h2>Savepoints</h2>
+<button onclick="createSavepoint()">Create savepoint</button>
+<a class="btn secondary" href="/sp.list.csv">Export list CSV</a>
+<table><thead><tr><th>ID</th><th>UTC</th><th>RX</th><th>NF</th><th>CSV</th></tr></thead><tbody id="sp"></tbody></table>
+</section>
+
+<div class="muted" id="msg"></div>
+</main>
+<script>
+function msg(t,err){document.getElementById('msg').className=err?'err':'ok';document.getElementById('msg').textContent=t}
+async function refresh(){
+  const r=await fetch('/api/status'); const s=await r.json();
+  document.getElementById('status').textContent=s.node+' AP '+location.host;
+  document.getElementById('status2').textContent='S: '+s.snr.toFixed(1)+' NF: '+s.nf+' Free: '+Math.floor(s.free_heap/1024)+'k Bat: '+s.batt_mv+'mV';
+  document.getElementById('time').textContent='Node UTC: '+new Date(s.time*1000).toISOString();
+  document.getElementById('lat').value=s.lat.toFixed(6);
+  document.getElementById('lon').value=s.lon.toFixed(6);
+  document.getElementById('pos').textContent=s.lat.toFixed(6)+', '+s.lon.toFixed(6);
+  document.getElementById('sp').innerHTML=s.savepoints.map(p=>'<tr><td>'+p.id+'</td><td>'+p.time+'</td><td>'+p.rx+'</td><td>'+p.nf+'</td><td><a href="/sp.csv?id='+p.id+'">CSV</a></td></tr>').join('');
+}
+function drawLoad(m){
+  const c=document.getElementById('load'),ctx=c.getContext('2d'),rect=c.getBoundingClientRect(),dpr=window.devicePixelRatio||1;
+  c.width=Math.max(240,Math.floor(rect.width*dpr)); c.height=Math.floor(148*dpr); ctx.setTransform(dpr,0,0,dpr,0,0);
+  const w=rect.width,h=148,p=18,chartBottom=h-34;
+  ctx.clearRect(0,0,w,h); ctx.fillStyle='#fff'; ctx.fillRect(0,0,w,h); ctx.strokeStyle='#111';
+  ctx.beginPath(); ctx.moveTo(p,chartBottom); ctx.lineTo(w-p,chartBottom); ctx.moveTo(p,p); ctx.lineTo(p,chartBottom); ctx.stroke();
+  const vals=m.airtime_ms.map(v=>v/600), max=Math.max(1,...vals), bw=(w-2*p)/vals.length-4;
+  ctx.fillStyle='#111';
+  ctx.font='10px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif'; ctx.textAlign='center'; ctx.textBaseline='top';
+  vals.forEach((v,i)=>{
+    const slot=(w-2*p)/vals.length, bh=v/max*(chartBottom-p-8), x=p+i*slot+2, cx=x+bw/2;
+    ctx.fillStyle='#111'; ctx.fillRect(x,chartBottom-bh,bw,bh);
+    ctx.fillStyle='#555'; ctx.fillText(String(m.rx[i]),cx,chartBottom+6);
+  });
+  const now=vals.length?vals[vals.length-1]:0, avg=vals.reduce((a,b)=>a+b,0)/Math.max(1,vals.length);
+  document.getElementById('loadScale').textContent='0-'+max.toFixed(1)+'%';
+  document.getElementById('loadNow').textContent=now.toFixed(1)+'%';
+  document.getElementById('loadAvg').textContent=avg.toFixed(1)+'%';
+  document.getElementById('loadLegend').textContent='RX packets / min';
+}
+function drawHeat(m){
+  const rows=m.heat.rows, paths=m.heat.paths;
+  let html='<table><thead><tr><th>Rep</th>';
+  paths.forEach((p,i)=>html+='<th>P'+(i+1)+'</th>'); html+='<th>PC</th></tr></thead><tbody>';
+  rows.forEach(r=>{html+='<tr><td>'+r.rep+'</td>'; r.pos.forEach(v=>{const shade=v==1?'#111':v==2?'#666':v==3?'#aaa':'#eee'; html+='<td style="background:'+shade+'">&nbsp;</td>'}); html+='<td>'+r.pc+'</td></tr>'});
+  html+='</tbody></table>'; document.getElementById('heat').innerHTML=html;
+}
+async function refreshMonitor(){
+  const r=await fetch('/api/monitor'); const m=await r.json();
+  drawLoad(m); drawHeat(m);
+}
+async function post(url){const r=await fetch(url,{method:'POST'}); const t=await r.text(); msg(t,!r.ok); await refresh()}
+function setTime(){post('/api/time?epoch='+Math.floor(Date.now()/1000))}
+function createSavepoint(){post('/api/savepoint')}
+function savePosition(){post('/api/position?lat='+encodeURIComponent(lat.value)+'&lon='+encodeURIComponent(lon.value))}
+function setPosition(){
+  if(!navigator.geolocation){msg('Geolocation not available',true);return}
+  navigator.geolocation.getCurrentPosition(p=>{
+    lat.value=p.coords.latitude.toFixed(6); lon.value=p.coords.longitude.toFixed(6); savePosition();
+  },e=>msg(e.message,true),{enableHighAccuracy:true,timeout:15000,maximumAge:0});
+}
+refresh(); refreshMonitor(); setInterval(refreshMonitor,10000);
+</script></body></html>
+)HTML";
+
+static void handleObserverWebPosition(MyMesh* mesh, AsyncWebServerRequest* request) {
+  if (!mesh || !request->hasParam("lat") || !request->hasParam("lon")) {
+    request->send(400, "text/plain", "missing position");
+    return;
+  }
+  double lat = atof(request->getParam("lat")->value().c_str());
+  double lon = atof(request->getParam("lon")->value().c_str());
+  if (lat < -90.0 || lat > 90.0 || lon < -180.0 || lon > 180.0) {
+    request->send(400, "text/plain", "invalid position");
+    return;
+  }
+  mesh->setObserverPosition(lat, lon);
+  request->send(200, "text/plain", "position saved");
+}
+#endif
 
 #define REQ_TYPE_GET_STATUS         0x01 // same as _GET_STATS
 #define REQ_TYPE_KEEP_ALIVE         0x02
@@ -788,7 +947,9 @@ static bool isShare(const mesh::Packet *packet) {
 void MyMesh::onAdvertRecv(mesh::Packet *packet, const mesh::Identity &id, uint32_t timestamp,
                           const uint8_t *app_data, size_t app_data_len) {
   mesh::Mesh::onAdvertRecv(packet, id, timestamp, app_data, app_data_len); // chain to super impl
+#ifdef ENABLE_OBSERVER_CLOCK_SYNC
   observeClockSyncSample(id, timestamp);
+#endif
 
   // if this a zero hop advert (and not via 'Share'), add it to neighbours
   if (packet->path_len == 0 && !isShare(packet)) {
@@ -1032,6 +1193,16 @@ MyMesh::MyMesh(mesh::MainBoard &board, mesh::Radio &radio, mesh::MillisecondCloc
   observer_prev_health_rx = 0;
   observer_prev_health_free_heap = 0;
   observer_prev_health_min_heap = 0;
+#if defined(ENABLE_OBSERVER_WEB_AP) && defined(ESP32)
+  observer_web_server = nullptr;
+  observer_web_ap_running = false;
+  observer_web_next_rollover = 60000;
+  observer_web_prev_rx_total = 0;
+  observer_web_prev_air_ms = 0;
+  observer_web_bin_index = 0;
+  memset(observer_web_rx_bins, 0, sizeof(observer_web_rx_bins));
+  memset(observer_web_air_bins, 0, sizeof(observer_web_air_bins));
+#endif
 #if defined(ESP32)
   if (observerHealthValid(observer_health_breadcrumb)) {
     observer_prev_health_valid = true;
@@ -1179,6 +1350,10 @@ void MyMesh::begin(FILESYSTEM *fs) {
 
 #if ENV_INCLUDE_GPS == 1
   applyGpsPrefs();
+#endif
+
+#if defined(ENABLE_OBSERVER_WEB_AP) && defined(ESP32) && defined(OBSERVER_WEB_AP_DEFAULT_ON)
+  startObserverWebAp(nullptr, 0);
 #endif
 }
 
@@ -1849,6 +2024,368 @@ bool MyMesh::createObserverSavepoint(const uint16_t* activity_bins, const uint16
 }
 #endif
 
+#if defined(ENABLE_OBSERVER_WEB_AP) && defined(ESP32)
+String MyMesh::buildObserverSavepointListCsv() const {
+  String body = "id,datetime_utc,rx_total,noise_floor\n";
+  if (!_fs) return body;
+
+  File f = _fs->open(SAVEPOINT_INDEX_FILE);
+  if (!f) return body;
+
+  char line[OBSERVER_SAVEPOINT_LINE_SIZE];
+  while (readLine(f, line, sizeof(line))) {
+    unsigned int id = 0;
+    unsigned long ts = 0;
+    unsigned long rx = 0;
+    int nf = 0;
+    if (sscanf(line, "%u,%lu,%lu,%d", &id, &ts, &rx, &nf) != 4) continue;
+    DateTime dt((uint32_t)ts);
+    char row[72];
+    snprintf(row, sizeof(row), "%u,%04d-%02d-%02dT%02d:%02d:%02dZ,%lu,%d\n",
+             id, dt.year(), dt.month(), dt.day(), dt.hour(), dt.minute(), dt.second(), rx, nf);
+    body += row;
+  }
+  f.close();
+  return body;
+}
+
+void MyMesh::updateObserverWebMetrics() {
+  unsigned long now = millis();
+  while ((long)(now - observer_web_next_rollover) >= 0) {
+    observer_web_bin_index = (observer_web_bin_index + 1) % 12;
+    observer_web_rx_bins[observer_web_bin_index] = 0;
+    observer_web_air_bins[observer_web_bin_index] = 0;
+    observer_web_next_rollover += 60000UL;
+  }
+
+  if (observer_rx_packets != observer_web_prev_rx_total) {
+    uint32_t delta = observer_rx_packets - observer_web_prev_rx_total;
+    uint32_t value = (uint32_t)observer_web_rx_bins[observer_web_bin_index] + delta;
+    observer_web_rx_bins[observer_web_bin_index] = value > UINT16_MAX ? UINT16_MAX : (uint16_t)value;
+    observer_web_prev_rx_total = observer_rx_packets;
+  }
+
+  uint32_t air_ms = getReceiveAirTime();
+  if (air_ms != observer_web_prev_air_ms) {
+    uint32_t delta = air_ms - observer_web_prev_air_ms;
+    uint32_t value = (uint32_t)observer_web_air_bins[observer_web_bin_index] + delta;
+    observer_web_air_bins[observer_web_bin_index] = value > UINT16_MAX ? UINT16_MAX : (uint16_t)value;
+    observer_web_prev_air_ms = air_ms;
+  }
+}
+
+String MyMesh::buildObserverWebStatusJson() const {
+  String body = "{\"node\":\"";
+  body += _prefs.node_name;
+  body += "\",\"time\":";
+  body += String((unsigned long)getRTCClock()->getCurrentTime());
+  body += ",\"lat\":";
+  body += String(_prefs.node_lat, 6);
+  body += ",\"lon\":";
+  body += String(_prefs.node_lon, 6);
+  body += ",\"snr\":";
+  body += String(getObserverLastSnr(), 1);
+  body += ",\"nf\":";
+  body += String(getObserverNoiseFloor());
+  body += ",\"free_heap\":";
+  body += String((unsigned long)ESP.getFreeHeap());
+  body += ",\"batt_mv\":";
+  body += String((unsigned int)getObserverBattMilliVolts());
+  body += ",\"savepoints\":[";
+
+  bool first = true;
+  File f = _fs ? _fs->open(SAVEPOINT_INDEX_FILE) : File();
+  if (f) {
+    char line[OBSERVER_SAVEPOINT_LINE_SIZE];
+    while (readLine(f, line, sizeof(line))) {
+      unsigned int id = 0;
+      unsigned long ts = 0;
+      unsigned long rx = 0;
+      int nf = 0;
+      if (sscanf(line, "%u,%lu,%lu,%d", &id, &ts, &rx, &nf) != 4) continue;
+      DateTime dt((uint32_t)ts);
+      char row[128];
+      snprintf(row, sizeof(row), "%s{\"id\":%u,\"time\":\"%04d-%02d-%02d %02d:%02d\",\"rx\":%lu,\"nf\":%d}",
+               first ? "" : ",", id, dt.year(), dt.month(), dt.day(), dt.hour(), dt.minute(), rx, nf);
+      body += row;
+      first = false;
+    }
+    f.close();
+  }
+
+  body += "]}";
+  return body;
+}
+
+static void appendJsonString(String& body, const char* text) {
+  body += "\"";
+  if (text) {
+    while (*text) {
+      if (*text == '"' || *text == '\\') body += "\\";
+      body += *text++;
+    }
+  }
+  body += "\"";
+}
+
+String MyMesh::buildObserverWebMonitorJson() const {
+  String body = "{\"rx\":[";
+  for (uint8_t i = 0; i < 12; i++) {
+    uint8_t idx = (observer_web_bin_index + i + 1) % 12;
+    if (i) body += ",";
+    body += String((unsigned int)observer_web_rx_bins[idx]);
+  }
+  body += "],\"airtime_ms\":[";
+  for (uint8_t i = 0; i < 12; i++) {
+    uint8_t idx = (observer_web_bin_index + i + 1) % 12;
+    if (i) body += ",";
+    body += String((unsigned int)observer_web_air_bins[idx]);
+  }
+  body += "],\"paths\":[";
+  char line[96];
+  uint8_t path_count = 0;
+  for (uint8_t i = 0; i < 8; i++) {
+    if (!getObserverPathLine(i, line, sizeof(line))) continue;
+    if (path_count++) body += ",";
+    appendJsonString(body, line);
+  }
+  body += "],\"heards\":[";
+  uint8_t heard_count = 0;
+  for (uint8_t i = 0; i < 10; i++) {
+    if (!getObserverLastHopLine(i, line, sizeof(line))) continue;
+    if (heard_count++) body += ",";
+    appendJsonString(body, line);
+  }
+  body += "],\"heat\":{\"paths\":[";
+
+  char path_text[8][32];
+  memset(path_text, 0, sizeof(path_text));
+  path_count = 0;
+  for (uint8_t i = 0; i < 8; i++) {
+    if (!getObserverPathLine(i, line, sizeof(line))) continue;
+    char work[96];
+    snprintf(work, sizeof(work), "%s", line);
+    char* cursor = work;
+    char* count = strtok(cursor, " ");
+    (void)count;
+    char path[32] = "";
+    char* token = nullptr;
+    while ((token = strtok(nullptr, " ")) != nullptr) {
+      size_t len = strlen(token);
+      if (strcmp(token, ">999") == 0 || (len > 1 && (token[len - 1] == 's' || token[len - 1] == 'm'))) break;
+      if (strcmp(token, "-") != 0) {
+        if (path[0]) strncat(path, " ", sizeof(path) - strlen(path) - 1);
+        strncat(path, token, sizeof(path) - strlen(path) - 1);
+      }
+    }
+    if (!path[0]) continue;
+    snprintf(path_text[path_count], sizeof(path_text[path_count]), "%s", path);
+    if (path_count) body += ",";
+    appendJsonString(body, path_text[path_count]);
+    path_count++;
+  }
+
+  struct WebHeatRow {
+    char rep[8];
+    uint8_t pos[8];
+    uint8_t pc;
+  };
+  WebHeatRow rows[10];
+  uint8_t row_count = 0;
+  memset(rows, 0, sizeof(rows));
+  for (uint8_t p = 0; p < path_count; p++) {
+    char work[32];
+    snprintf(work, sizeof(work), "%s", path_text[p]);
+    char* token = strtok(work, " ");
+    uint8_t pos = 1;
+    while (token) {
+      int row = -1;
+      for (uint8_t r = 0; r < row_count; r++) {
+        if (strcmp(rows[r].rep, token) == 0) {
+          row = r;
+          break;
+        }
+      }
+      if (row < 0 && row_count < 10) {
+        row = row_count++;
+        snprintf(rows[row].rep, sizeof(rows[row].rep), "%s", token);
+      }
+      if (row >= 0) {
+        rows[row].pos[p] = pos;
+      }
+      if (pos < 3) pos++;
+      token = strtok(nullptr, " ");
+    }
+  }
+  for (uint8_t r = 0; r < row_count; r++) {
+    uint8_t pc = 0;
+    for (uint8_t p = 0; p < path_count; p++) {
+      if (rows[r].pos[p]) pc++;
+    }
+    rows[r].pc = pc;
+  }
+  for (uint8_t i = 0; i < row_count; i++) {
+    for (uint8_t j = i + 1; j < row_count; j++) {
+      if (rows[j].pc > rows[i].pc) {
+        WebHeatRow tmp = rows[i];
+        rows[i] = rows[j];
+        rows[j] = tmp;
+      }
+    }
+  }
+
+  body += "],\"rows\":[";
+  for (uint8_t r = 0; r < row_count; r++) {
+    if (r) body += ",";
+    body += "{\"rep\":";
+    appendJsonString(body, rows[r].rep);
+    body += ",\"pc\":";
+    body += String((unsigned int)rows[r].pc);
+    body += ",\"pos\":[";
+    for (uint8_t p = 0; p < path_count; p++) {
+      if (p) body += ",";
+      body += String((unsigned int)rows[r].pos[p]);
+    }
+    body += "]}";
+  }
+  body += "]}}";
+  return body;
+}
+
+void MyMesh::setupObserverWebRoutes() {
+  if (!observer_web_server) return;
+
+  observer_web_server->on("/", HTTP_GET, [](AsyncWebServerRequest* request) {
+    request->send_P(200, "text/html", OBSERVER_WEB_HTML);
+  });
+
+  observer_web_server->on("/api/status", HTTP_GET, [this](AsyncWebServerRequest* request) {
+    request->send(200, "application/json", buildObserverWebStatusJson());
+  });
+
+  observer_web_server->on("/api/monitor", HTTP_GET, [this](AsyncWebServerRequest* request) {
+    request->send(200, "application/json", buildObserverWebMonitorJson());
+  });
+
+  observer_web_server->on("/api/time", HTTP_POST, [this](AsyncWebServerRequest* request) {
+    if (!request->hasParam("epoch")) {
+      request->send(400, "text/plain", "missing epoch");
+      return;
+    }
+    uint32_t epoch = (uint32_t)strtoul(request->getParam("epoch")->value().c_str(), nullptr, 10);
+    if (epoch < CLOCK_SYNC_MIN_TIME || epoch > CLOCK_SYNC_MAX_TIME) {
+      request->send(400, "text/plain", "invalid epoch");
+      return;
+    }
+    getRTCClock()->setCurrentTime(epoch);
+    request->send(200, "text/plain", "time set");
+  });
+
+  observer_web_server->on("/api/position", HTTP_ANY, [this](AsyncWebServerRequest* request) {
+    handleObserverWebPosition(this, request);
+  });
+
+#ifdef ENABLE_OBSERVER_SAVEPOINTS
+  observer_web_server->on("/api/savepoint", HTTP_POST, [this](AsyncWebServerRequest* request) {
+    char status[32];
+    updateObserverWebMetrics();
+    bool ok = createObserverSavepoint(observer_web_rx_bins, observer_web_air_bins, 12, observer_web_bin_index,
+                                      status, sizeof(status));
+    request->send(ok ? 200 : 500, "text/plain", status[0] ? status : (ok ? "SP saved" : "SP save failed"));
+  });
+#endif
+
+  observer_web_server->on("/sp.list.csv", HTTP_GET, [this](AsyncWebServerRequest* request) {
+    request->send(200, "text/csv", buildObserverSavepointListCsv());
+  });
+
+  observer_web_server->on("/sp.csv", HTTP_GET, [this](AsyncWebServerRequest* request) {
+    if (!request->hasParam("id")) {
+      request->send(400, "text/plain", "missing id");
+      return;
+    }
+    uint16_t id = (uint16_t)atoi(request->getParam("id")->value().c_str());
+    char filename[16];
+    formatSavepointFilename(filename, sizeof(filename), id);
+    if (!_fs || !_fs->exists(filename)) {
+      request->send(404, "text/plain", "savepoint not found");
+      return;
+    }
+    char download_name[20];
+    snprintf(download_name, sizeof(download_name), "sp%04u.csv", (unsigned int)id);
+    AsyncWebServerResponse* response = request->beginResponse(*_fs, filename, "text/csv", true);
+    response->addHeader("Content-Disposition", String("attachment; filename=\"") + download_name + "\"");
+    request->send(response);
+  });
+}
+
+bool MyMesh::startObserverWebAp(char* status, size_t status_size) {
+  if (observer_web_ap_running) {
+    if (status && status_size) snprintf(status, status_size, "AP http://%s", WiFi.softAPIP().toString().c_str());
+    return true;
+  }
+
+#ifdef WITH_MQTT_OBSERVER
+  mqtt_observer.end();
+#endif
+  WiFi.mode(WIFI_AP);
+  bool ok = WiFi.softAP(OBSERVER_WEB_AP_SSID, OBSERVER_WEB_AP_PASSWORD);
+  if (!ok) {
+    if (status && status_size) snprintf(status, status_size, "AP start failed");
+    return false;
+  }
+
+  if (!observer_web_server) {
+    observer_web_server = new AsyncWebServer(80);
+    setupObserverWebRoutes();
+  }
+  observer_web_server->begin();
+  observer_web_ap_running = true;
+  if (status && status_size) snprintf(status, status_size, "AP http://%s", WiFi.softAPIP().toString().c_str());
+  return true;
+}
+
+void MyMesh::stopObserverWebAp() {
+  if (!observer_web_ap_running) return;
+  if (observer_web_server) {
+    observer_web_server->end();
+  }
+  WiFi.softAPdisconnect(true);
+  WiFi.mode(WIFI_OFF);
+  observer_web_ap_running = false;
+#ifdef WITH_MQTT_OBSERVER
+  if (_prefs.mqtt_enabled) mqtt_observer.begin();
+#endif
+}
+
+void MyMesh::setObserverPosition(double lat, double lon) {
+  _prefs.node_lat = lat;
+  _prefs.node_lon = lon;
+  savePrefs();
+}
+
+bool MyMesh::toggleObserverWebAp(char* status, size_t status_size) {
+  if (observer_web_ap_running) {
+    stopObserverWebAp();
+    if (status && status_size) snprintf(status, status_size, "AP stopped");
+    return false;
+  }
+  startObserverWebAp(status, status_size);
+  return observer_web_ap_running;
+}
+
+void MyMesh::getObserverWebApLine(char* dest, size_t dest_size) const {
+  if (!dest || dest_size == 0) return;
+  if (!observer_web_ap_running) {
+    snprintf(dest, dest_size, "AP:off");
+    return;
+  }
+  snprintf(dest, dest_size, "AP:on C:%u %s",
+           (unsigned int)WiFi.softAPgetStationNum(),
+           WiFi.softAPIP().toString().c_str());
+}
+#endif
+
 void MyMesh::resetObserverLiveStats() {
   observer_rx_packets = 0;
   observer_mqtt_published = 0;
@@ -2143,6 +2680,20 @@ void MyMesh::handleCommand(uint32_t sender_timestamp, char *command, char *reply
     }
     reply[0] = 0;
   }
+#if defined(ENABLE_OBSERVER_WEB_AP) && defined(ESP32)
+  else if (strcmp(command, "web.ap on") == 0 || strcmp(command, "web.ap") == 0) {
+    startObserverWebAp(reply, 160);
+  } else if (strcmp(command, "web.ap off") == 0) {
+    stopObserverWebAp();
+    strcpy(reply, "AP stopped");
+  } else if (strcmp(command, "web.ap status") == 0) {
+    if (observer_web_ap_running) {
+      snprintf(reply, 160, "AP http://%s ssid:%s", WiFi.softAPIP().toString().c_str(), OBSERVER_WEB_AP_SSID);
+    } else {
+      strcpy(reply, "AP stopped");
+    }
+  }
+#endif
 #ifdef ENABLE_OBSERVER_SAVEPOINTS
   else if (strcmp(command, "sp.list") == 0) {
     File f = _fs->open(SAVEPOINT_INDEX_FILE);
@@ -2324,6 +2875,9 @@ void MyMesh::handleCommand(uint32_t sender_timestamp, char *command, char *reply
 }
 
 void MyMesh::loop() {
+#if defined(ENABLE_OBSERVER_WEB_AP) && defined(ESP32)
+  updateObserverWebMetrics();
+#endif
 #ifdef WITH_BRIDGE
   bridge.loop();
 #endif
@@ -2376,6 +2930,9 @@ void MyMesh::loop() {
 bool MyMesh::hasPendingWork() const {
 #if defined(WITH_BRIDGE)
   if (bridge.isRunning()) return true;  // bridge needs WiFi radio, can't sleep
+#endif
+#if defined(ENABLE_OBSERVER_WEB_AP) && defined(ESP32)
+  if (observer_web_ap_running) return true;
 #endif
 #if defined(WITH_MQTT_OBSERVER)
   if (mqtt_observer.isRunning()) return true;

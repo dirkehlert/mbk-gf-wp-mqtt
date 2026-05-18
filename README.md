@@ -65,6 +65,80 @@ advert
 - SSID: lokal im Build als `MQTT_OBSERVER_WIFI_SSID` hinterlegt
 - Passwort: lokal im Build als `MQTT_OBSERVER_WIFI_PASSWORD` hinterlegt
 
+## Field-Web-AP
+
+Der WP startet im aktuellen Test-Build automatisch einen lokalen Access Point
+fuer Feldarbeit. Das ist ueber `OBSERVER_WEB_AP_DEFAULT_ON=1` im
+WP-Buildprofil aktiviert und sollte fuer einen spaeteren Feld-/MQTT-Build
+wieder bewusst entschieden werden.
+
+CLI-Kommandos:
+
+```text
+web.ap on
+web.ap status
+web.ap off
+```
+
+Alternativ kann der Field-Web-AP direkt am Geraet auf dem MQTT-Screen per
+Doppelklick ein- und ausgeschaltet werden.
+
+Beim Start des AP wird MQTT beendet, weil der ESP32-WiFi-Mode auf Access Point
+wechselt. Beim Stop des AP wird MQTT wieder gestartet, sofern MQTT in den Prefs
+aktiviert ist.
+
+- SSID: `MBK-GF-WP`
+- Passwort: `observer2026`
+- URL: `http://192.168.4.1/`
+
+Die Webseite bietet:
+
+- aktuelle Node-Zeit vom verbundenen Client setzen
+- aktuelle Position des Clients speichern
+- Load-Screen als automatisch aktualisiertes 12-Minuten-Balkendiagramm anzeigen
+- Heatstrip-Screen als automatisch aktualisierte Pfad/Repr-Matrix anzeigen
+- Savepoints listen
+- neuen Savepoint erzeugen
+- Savepoint-Liste als CSV exportieren
+- einzelne Savepoints als CSV herunterladen
+
+Web-API:
+
+```text
+GET  /api/status
+GET  /api/monitor
+POST /api/time?epoch=<unix_utc>
+GET  /api/position?lat=<lat>&lon=<lon>
+POST /api/position?lat=<lat>&lon=<lon>
+POST /api/savepoint
+GET  /sp.list.csv
+GET  /sp.csv?id=<id>
+```
+
+`/api/status` liefert Node-Name, UTC-Zeit, Position, SNR, Noise Floor, freien
+Heap, Batterie und Savepoint-Metadaten. `/api/monitor` liefert RX-Minutenwerte,
+Load-Airtime und Heatstrip-Daten fuer die Live-Ansicht.
+
+Hinweis: Browser-Geolocation kann auf iOS ueber unverschluesseltes
+`http://192.168.4.1` blockiert werden. Die Webseite bietet deshalb auch
+manuelle Lat/Lon-Felder. Fuer automatisches Setzen per iPhone ist ein iOS
+Shortcut sinnvoll, der den aktuellen Standort abfragt und `/api/position` mit
+`lat` und `lon` aufruft.
+
+iOS Shortcut fuer Position:
+
+1. Aktion `Aktuellen Standort abrufen`
+2. Aktion `Inhalt von URL abrufen`
+3. URL:
+
+```text
+http://192.168.4.1/api/position?lat=<Breitengrad>&lon=<Laengengrad>
+```
+
+4. Methode: `POST` oder `GET`
+
+Die Weboberflaeche und die manuellen Lat/Lon-Felder bleiben parallel nutzbar.
+
 ## MQTT
 
 - Broker: `mqtt.meshcorenetz.de`
@@ -160,6 +234,7 @@ MQTT-Screen:
 - MQTT-Verbindungsstatus und letzter MQTT-State-Code
 - letzter lokaler MQTT-Fehler
 - Zaehler fuer WLAN-, MQTT-Verbindungs- und Publish-Fehler
+- Field-Web-AP-Status mit Clientanzahl und IP-Adresse
 
 Heards-Screen:
 
@@ -188,7 +263,7 @@ Load-Screen:
 
 Savepoints-Screen:
 
-- zweite Zeile zeigt den Clock-Sync-Status
+- zweite Zeile zeigt die aktuelle UTC-Zeit und ob die Uhr gesetzt ist
 - listet gespeicherte Savepoints mit ID, Uhrzeit, RX-Zaehler und Noise Floor
 - Doppelklick erzeugt einen neuen Savepoint im Flash
 - Long Press setzt Live-Zaehler, Pfade und Heards zurueck
@@ -203,11 +278,14 @@ tools/capture_screen.py --port /dev/cu.usbserial-0001 --all
 
 ## Uhrzeit
 
-Der Node synchronisiert seine Uhr passiv aus validierten Mesh-Adverts. Dafuer
-werden nur plausible Sender-Zeitstempel akzeptiert. Nach 5 Samples aus
-mindestens 2 verschiedenen Nodes wird der Median als Mesh-Zeit uebernommen,
-sofern die lokale Uhr dadurch nur vorwaerts gesetzt wird. Es wird nichts ins
-Mesh gesendet.
+Der Node synchronisiert seine Uhr nicht mehr aus dem Mesh. Die Uhr wird bewusst
+lokal gesetzt:
+
+- per Field-Web-AP ueber die Webseite
+- per iOS Shortcut gegen `/api/time`
+- per serieller CLI
+
+Savepoints speichern die aktuelle UTC-Zeit, sofern sie zuvor gesetzt wurde.
 
 ## Lokale Secrets
 
@@ -226,6 +304,7 @@ Danach die Werte in `platformio.local.ini` anpassen. Diese Datei ist in
 - Doppelklick auf Pfad- oder Heards-Screen: direkt zwischen diesen beiden Screens wechseln
 - Doppelklick auf Heatstrip-Screen: Heatstrip-Snapshot aktualisieren
 - Doppelklick auf Savepoints-Screen: Savepoint speichern
+- Doppelklick auf MQTT-Screen: Field-Web-AP toggeln
 - Doppelklick auf anderen Screens: Zero-Hop Advert senden
 - Langer Druck auf Status-Screen: Flood-Advert senden
 - Langer Druck auf Pfad-Screen: Hibernate

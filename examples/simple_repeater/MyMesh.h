@@ -38,6 +38,10 @@
 #endif
 #include "RateLimiter.h"
 
+#if defined(ENABLE_OBSERVER_WEB_AP) && defined(ESP32)
+class AsyncWebServer;
+#endif
+
 #ifdef WITH_BRIDGE
 extern AbstractBridge* bridge;
 #endif
@@ -185,6 +189,16 @@ class MyMesh : public mesh::Mesh, public CommonCLICallbacks {
 #ifdef WITH_MQTT_OBSERVER
   MQTTObserver mqtt_observer;
 #endif
+#if defined(ENABLE_OBSERVER_WEB_AP) && defined(ESP32)
+  AsyncWebServer* observer_web_server;
+  bool observer_web_ap_running;
+  unsigned long observer_web_next_rollover;
+  uint32_t observer_web_prev_rx_total;
+  uint32_t observer_web_prev_air_ms;
+  uint16_t observer_web_rx_bins[12];
+  uint16_t observer_web_air_bins[12];
+  uint8_t observer_web_bin_index;
+#endif
 
   void putNeighbour(const mesh::Identity& id, uint32_t timestamp, float snr);
   uint8_t handleLoginReq(const mesh::Identity& sender, const uint8_t* secret, uint32_t sender_timestamp, const uint8_t* data, bool is_flood);
@@ -199,6 +213,13 @@ class MyMesh : public mesh::Mesh, public CommonCLICallbacks {
   void rememberObserverPath(const mesh::Packet* packet);
   void rememberObserverLastHop(const mesh::Packet* packet, int8_t snr_x4);
   void observeClockSyncSample(const mesh::Identity& id, uint32_t timestamp);
+#if defined(ENABLE_OBSERVER_WEB_AP) && defined(ESP32)
+  void setupObserverWebRoutes();
+  String buildObserverWebStatusJson() const;
+  String buildObserverWebMonitorJson() const;
+  String buildObserverSavepointListCsv() const;
+  void updateObserverWebMetrics();
+#endif
 
 protected:
   float getAirtimeBudgetFactor() const override {
@@ -308,6 +329,14 @@ public:
 #endif
   void resetObserverLiveStats();
   void hibernate();
+#if defined(ENABLE_OBSERVER_WEB_AP) && defined(ESP32)
+  bool startObserverWebAp(char* status, size_t status_size);
+  void stopObserverWebAp();
+  bool toggleObserverWebAp(char* status, size_t status_size);
+  void getObserverWebApLine(char* dest, size_t dest_size) const;
+  void setObserverPosition(double lat, double lon);
+  bool isObserverWebApRunning() const { return observer_web_ap_running; }
+#endif
 
   void savePrefs() override {
     _cli.savePrefs(_fs);

@@ -829,12 +829,20 @@ void UITask::renderCurrScreen() {
                (unsigned long)_mesh->getObserverMqttPublishFailures());
       _display->print(tmp);
 
+      _display->setCursor(UI_LEFT_MARGIN, 76);
+#if defined(ENABLE_OBSERVER_WEB_AP) && defined(ESP32)
+      _mesh->getObserverWebApLine(tmp, sizeof(tmp));
+      _display->print(tmp);
+#else
+      _display->print("AP:n/a");
+#endif
+
       _mesh->getObserverHealthLine(tmp, sizeof(tmp));
-      _display->drawTextEllipsized(UI_LEFT_MARGIN, 76, _display->width() - UI_LEFT_MARGIN, tmp);
+      _display->drawTextEllipsized(UI_LEFT_MARGIN, 88, _display->width() - UI_LEFT_MARGIN, tmp);
     }
 
     if (_status[0] && millis() < _status_until) {
-      _display->setCursor(UI_LEFT_MARGIN, 82);
+      _display->setCursor(UI_LEFT_MARGIN, 100);
       _display->setColor(DisplayDriver::LIGHT);
       _display->print(_status);
     }
@@ -913,6 +921,12 @@ void UITask::loop() {
           } else if (_screen == 5) {
             _mesh->createObserverSavepoint(_activity_bins, _airtime_bins, RX_ACTIVITY_BINS, _activity_bin_index,
                                            _status, sizeof(_status));
+          } else if (_screen == 6) {
+#if defined(ENABLE_OBSERVER_WEB_AP) && defined(ESP32)
+            _mesh->toggleObserverWebAp(_status, sizeof(_status));
+#else
+            strcpy(_status, "AP n/a");
+#endif
           } else {
             _mesh->sendSelfAdvertisement(0, false);
             strcpy(_status, "Advert sent");
