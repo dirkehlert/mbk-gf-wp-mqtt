@@ -323,11 +323,18 @@ public:
   bool getObserverLastHopLine(uint8_t index, char* dest, size_t dest_size) const;
 #ifdef ENABLE_OBSERVER_SAVEPOINTS
   bool getObserverSavepointLine(uint8_t index, char* dest, size_t dest_size) const;
+#else
+  bool getObserverSavepointLine(uint8_t, char*, size_t) const { return false; }
 #endif
   void getObserverClockSyncStatus(char* dest, size_t dest_size) const;
 #ifdef ENABLE_OBSERVER_SAVEPOINTS
   bool createObserverSavepoint(const uint16_t* activity_bins, const uint16_t* airtime_bins, uint8_t bin_count,
                                uint8_t newest_bin, char* status, size_t status_size);
+#else
+  bool createObserverSavepoint(const uint16_t*, const uint16_t*, uint8_t, uint8_t, char* status, size_t status_size) {
+    if (status && status_size) snprintf(status, status_size, "SP n/a");
+    return false;
+  }
 #endif
   void resetObserverLiveStats();
   void hibernate();

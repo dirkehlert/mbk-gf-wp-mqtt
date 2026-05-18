@@ -62,16 +62,14 @@ void UITask::begin(NodePrefs* node_prefs, const char* build_date, const char* fi
   user_btn2.begin();
 #endif
 
-  // strip off dash and commit hash by changing dash to null terminator
-  // e.g: v1.2.3-abcdef -> v1.2.3
-  char *version = strdup(firmware_version);
+  char version[32];
+  snprintf(version, sizeof(version), "%s", firmware_version);
   char *dash = strchr(version, '-');
   if(dash){
     *dash = 0;
   }
 
-  // v1.2.3 (1 Jan 2025)
-  sprintf(_version_info, "%s (%s)", version, build_date);
+  snprintf(_version_info, sizeof(_version_info), "%s (%s)", version, build_date);
 }
 
 void UITask::renderBattery(uint16_t batt_mv, int x, int y) {

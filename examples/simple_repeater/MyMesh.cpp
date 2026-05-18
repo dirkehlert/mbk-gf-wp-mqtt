@@ -2088,10 +2088,12 @@ void MyMesh::updateObserverWebMetrics() {
   }
 }
 
+static void appendJsonString(String& body, const char* text);
+
 String MyMesh::buildObserverWebStatusJson() const {
-  String body = "{\"node\":\"";
-  body += _prefs.node_name;
-  body += "\",\"time\":";
+  String body = "{\"node\":";
+  appendJsonString(body, _prefs.node_name);
+  body += ",\"time\":";
   body += String((unsigned long)getRTCClock()->getCurrentTime());
   body += ",\"lat\":";
   body += String(_prefs.node_lat, 6);
@@ -2137,8 +2139,23 @@ static void appendJsonString(String& body, const char* text) {
   body += "\"";
   if (text) {
     while (*text) {
-      if (*text == '"' || *text == '\\') body += "\\";
-      body += *text++;
+      unsigned char c = (unsigned char)*text++;
+      if (c == '"' || c == '\\') {
+        body += "\\";
+        body += (char)c;
+      } else if (c == '\n') {
+        body += "\\n";
+      } else if (c == '\r') {
+        body += "\\r";
+      } else if (c == '\t') {
+        body += "\\t";
+      } else if (c < 0x20) {
+        char esc[7];
+        snprintf(esc, sizeof(esc), "\\u%04x", (unsigned int)c);
+        body += esc;
+      } else {
+        body += (char)c;
+      }
     }
   }
   body += "\"";
@@ -2301,7 +2318,7 @@ void MyMesh::setupObserverWebRoutes() {
     request->send(200, "text/plain", "time set");
   });
 
-  observer_web_server->on("/api/position", HTTP_ANY, [this](AsyncWebServerRequest* request) {
+  observer_web_server->on("/api/position", HTTP_POST, [this](AsyncWebServerRequest* request) {
     if (observer_web_sta_running) {
       request->send(403, "text/plain", "view mode");
       return;

@@ -124,7 +124,6 @@ Web-API:
 GET  /api/status
 GET  /api/monitor
 POST /api/time?epoch=<unix_utc>
-GET  /api/position?lat=<lat>&lon=<lon>
 POST /api/position?lat=<lat>&lon=<lon>
 POST /api/savepoint
 GET  /sp.list.csv
@@ -151,7 +150,7 @@ iOS Shortcut fuer Position:
 http://192.168.4.1/api/position?lat=<Breitengrad>&lon=<Laengengrad>
 ```
 
-4. Methode: `POST` oder `GET`
+4. Methode: `POST`
 
 Die Weboberflaeche und die manuellen Lat/Lon-Felder bleiben parallel nutzbar.
 
@@ -364,6 +363,28 @@ werden lokal gezaehlt, Pfade und Aktivitaet werden weiterhin angezeigt, nur der
 MQTT-Publish schlaegt lokal fehl und erhoeht die Fehlerzaehler.
 
 ## Verifikation
+
+Host-Regressionstests fuer die Observer-Web/API-Logik:
+
+```text
+python3 tools/observer_host_tests.py
+```
+
+Lokale Build-Matrix fuer die wichtigsten Ziele:
+
+```text
+/Users/dirkehlert/.platformio/penv/bin/pio run -e Heltec_Wireless_Paper_mqtt_observer -e ThinkNode_M1_field_monitor -e LilyGo_T-Echo_repeater -e WioTrackerL1_repeater
+```
+
+Optionaler Hardware-Smoke-Test, wenn das WP per USB angeschlossen ist:
+
+```text
+/Users/dirkehlert/.platformio/penv/bin/python tools/wp_smoke.py --port /dev/cu.usbserial-0001
+```
+
+Die GitHub Action `PR Build Check` fuehrt die Hosttests aus und baut danach die
+Build-Matrix. Damit sollen Upstream-/Merge-Aenderungen frueh auffallen, bevor
+sie auf dem Geraet landen.
 
 MQTT Subscribe-Test:
 
