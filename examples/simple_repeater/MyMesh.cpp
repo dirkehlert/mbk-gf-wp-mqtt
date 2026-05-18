@@ -177,6 +177,7 @@ canvas{display:block;width:100%;height:148px}
 <h1>WP Field Monitor</h1>
 <div class="muted" id="status">loading...</div>
 <div class="muted" id="status2"></div>
+<div class="muted" id="nodeTime"></div>
 
 <section class="panel">
 <h2>Load</h2>
@@ -198,16 +199,16 @@ canvas{display:block;width:100%;height:148px}
 
 <section class="panel">
 <h2>Time</h2>
-<button onclick="setTime()">Set from this device</button>
+<button id="timeBtn" onclick="setTime()">Set from this device</button>
 <div class="muted" id="time"></div>
 </section>
 
 <section class="panel">
 <h2>Position</h2>
-<button onclick="setPosition()">Use this device position</button>
+<button id="posBtn" onclick="setPosition()">Use this device position</button>
 <input id="lat" placeholder="Latitude">
 <input id="lon" placeholder="Longitude">
-<button class="secondary" onclick="savePosition()">Save entered position</button>
+<button id="posSaveBtn" class="secondary" onclick="savePosition()">Save entered position</button>
 <div class="muted" id="pos"></div>
 </section>
 
@@ -224,9 +225,14 @@ canvas{display:block;width:100%;height:148px}
 function msg(t,err){document.getElementById('msg').className=err?'err':'ok';document.getElementById('msg').textContent=t}
 async function refresh(){
   const r=await fetch('/api/status'); const s=await r.json();
-  document.getElementById('status').textContent=s.node+' AP '+location.host;
+  document.getElementById('status').textContent=s.node+' '+(s.view_mode?'View':'AP')+' '+location.host;
   document.getElementById('status2').textContent='S: '+s.snr.toFixed(1)+' NF: '+s.nf+' Free: '+Math.floor(s.free_heap/1024)+'k Bat: '+s.batt_mv+'mV';
-  document.getElementById('time').textContent='Node UTC: '+new Date(s.time*1000).toISOString();
+  const nodeUtc=new Date(s.time*1000).toISOString();
+  document.getElementById('nodeTime').textContent='Node UTC: '+nodeUtc;
+  document.getElementById('timeBtn').disabled=s.view_mode;
+  document.getElementById('posBtn').disabled=s.view_mode;
+  document.getElementById('posSaveBtn').disabled=s.view_mode;
+  document.getElementById('time').textContent='Node UTC: '+nodeUtc;
   document.getElementById('lat').value=s.lat.toFixed(6);
   document.getElementById('lon').value=s.lon.toFixed(6);
   document.getElementById('pos').textContent=s.lat.toFixed(6)+', '+s.lon.toFixed(6);
@@ -273,7 +279,7 @@ function setPosition(){
     lat.value=p.coords.latitude.toFixed(6); lon.value=p.coords.longitude.toFixed(6); savePosition();
   },e=>msg(e.message,true),{enableHighAccuracy:true,timeout:15000,maximumAge:0});
 }
-refresh(); refreshMonitor(); setInterval(refreshMonitor,10000);
+refresh(); refreshMonitor(); setInterval(refresh,10000); setInterval(refreshMonitor,10000);
 </script></body></html>
 )HTML";
 
@@ -1196,6 +1202,8 @@ MyMesh::MyMesh(mesh::MainBoard &board, mesh::Radio &radio, mesh::MillisecondCloc
 #if defined(ENABLE_OBSERVER_WEB_AP) && defined(ESP32)
   observer_web_server = nullptr;
   observer_web_ap_running = false;
+  observer_web_sta_running = false;
+  observer_web_sta_next_attempt = 0;
   observer_web_next_rollover = 60000;
   observer_web_prev_rx_total = 0;
   observer_web_prev_air_ms = 0;
@@ -1424,6 +1432,12 @@ int MyMesh::getObserverMqttState() const {
 void MyMesh::setObserverMqttEnabled(bool enabled) {
 #ifdef WITH_MQTT_OBSERVER
   if (_prefs.mqtt_enabled == enabled && mqtt_observer.isRunning() == enabled) return;
+  if (enabled) {
+#if defined(ENABLE_OBSERVER_WEB_AP) && defined(ESP32)
+    if (observer_web_ap_running) stopObserverWebAp();
+    if (observer_web_sta_running) stopObserverWebStaView();
+#endif
+  }
   _prefs.mqtt_enabled = enabled ? 1 : 0;
   _cli.savePrefs(_fs);
   if (enabled) {
@@ -2083,6 +2097,8 @@ String MyMesh::buildObserverWebStatusJson() const {
   body += String(_prefs.node_lat, 6);
   body += ",\"lon\":";
   body += String(_prefs.node_lon, 6);
+  body += ",\"view_mode\":";
+  body += observer_web_sta_running ? "true" : "false";
   body += ",\"snr\":";
   body += String(getObserverLastSnr(), 1);
   body += ",\"nf\":";
@@ -2268,6 +2284,10 @@ void MyMesh::setupObserverWebRoutes() {
   });
 
   observer_web_server->on("/api/time", HTTP_POST, [this](AsyncWebServerRequest* request) {
+    if (observer_web_sta_running) {
+      request->send(403, "text/plain", "view mode");
+      return;
+    }
     if (!request->hasParam("epoch")) {
       request->send(400, "text/plain", "missing epoch");
       return;
@@ -2282,6 +2302,10 @@ void MyMesh::setupObserverWebRoutes() {
   });
 
   observer_web_server->on("/api/position", HTTP_ANY, [this](AsyncWebServerRequest* request) {
+    if (observer_web_sta_running) {
+      request->send(403, "text/plain", "view mode");
+      return;
+    }
     handleObserverWebPosition(this, request);
   });
 
@@ -2324,6 +2348,9 @@ bool MyMesh::startObserverWebAp(char* status, size_t status_size) {
     if (status && status_size) snprintf(status, status_size, "AP http://%s", WiFi.softAPIP().toString().c_str());
     return true;
   }
+  if (observer_web_sta_running) {
+    stopObserverWebStaView();
+  }
 
 #ifdef WITH_MQTT_OBSERVER
   mqtt_observer.end();
@@ -2358,6 +2385,52 @@ void MyMesh::stopObserverWebAp() {
 #endif
 }
 
+bool MyMesh::startObserverWebStaView(char* status, size_t status_size) {
+  if (observer_web_sta_running) {
+    IPAddress ip = WiFi.localIP();
+    if (status && status_size) snprintf(status, status_size, "View http://%s", ip.toString().c_str());
+    return true;
+  }
+
+#ifdef WITH_MQTT_OBSERVER
+  if (_prefs.mqtt_enabled || mqtt_observer.isRunning()) {
+    _prefs.mqtt_enabled = 0;
+    _cli.savePrefs(_fs);
+    mqtt_observer.end();
+  }
+#endif
+  if (observer_web_ap_running) {
+    stopObserverWebAp();
+  }
+
+  if (!_prefs.wifi_ssid[0]) {
+    if (status && status_size) snprintf(status, status_size, "View no WiFi");
+    return false;
+  }
+
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(_prefs.wifi_ssid, _prefs.wifi_password);
+  if (!observer_web_server) {
+    observer_web_server = new AsyncWebServer(80);
+    setupObserverWebRoutes();
+  }
+  observer_web_server->begin();
+  observer_web_sta_running = true;
+  observer_web_sta_next_attempt = millis() + 10000UL;
+  if (status && status_size) snprintf(status, status_size, "View connecting");
+  return true;
+}
+
+void MyMesh::stopObserverWebStaView() {
+  if (!observer_web_sta_running) return;
+  if (observer_web_server) {
+    observer_web_server->end();
+  }
+  WiFi.disconnect(true);
+  WiFi.mode(WIFI_OFF);
+  observer_web_sta_running = false;
+}
+
 void MyMesh::setObserverPosition(double lat, double lon) {
   _prefs.node_lat = lat;
   _prefs.node_lon = lon;
@@ -2374,8 +2447,26 @@ bool MyMesh::toggleObserverWebAp(char* status, size_t status_size) {
   return observer_web_ap_running;
 }
 
+bool MyMesh::toggleObserverWebStaView(char* status, size_t status_size) {
+  if (observer_web_sta_running) {
+    stopObserverWebStaView();
+    if (status && status_size) snprintf(status, status_size, "View stopped");
+    return false;
+  }
+  startObserverWebStaView(status, status_size);
+  return observer_web_sta_running;
+}
+
 void MyMesh::getObserverWebApLine(char* dest, size_t dest_size) const {
   if (!dest || dest_size == 0) return;
+  if (observer_web_sta_running) {
+    if (WiFi.status() == WL_CONNECTED) {
+      snprintf(dest, dest_size, "View:on %s", WiFi.localIP().toString().c_str());
+    } else {
+      snprintf(dest, dest_size, "View:wifi...");
+    }
+    return;
+  }
   if (!observer_web_ap_running) {
     snprintf(dest, dest_size, "AP:off");
     return;
@@ -2692,6 +2783,33 @@ void MyMesh::handleCommand(uint32_t sender_timestamp, char *command, char *reply
     } else {
       strcpy(reply, "AP stopped");
     }
+  } else if (strcmp(command, "web.view on") == 0 || strcmp(command, "web.view") == 0) {
+    startObserverWebStaView(reply, 160);
+  } else if (strcmp(command, "web.view off") == 0) {
+    stopObserverWebStaView();
+    strcpy(reply, "View stopped");
+  } else if (strcmp(command, "web.view status") == 0) {
+    if (observer_web_sta_running) {
+      if (WiFi.status() == WL_CONNECTED) {
+        snprintf(reply, 160, "View http://%s mqtt:off", WiFi.localIP().toString().c_str());
+      } else {
+        strcpy(reply, "View connecting mqtt:off");
+      }
+    } else {
+      strcpy(reply, "View stopped");
+    }
+  }
+#endif
+#ifdef WITH_MQTT_OBSERVER
+  else if (strcmp(command, "mqtt on") == 0) {
+    setObserverMqttEnabled(true);
+    strcpy(reply, "MQTT on");
+  } else if (strcmp(command, "mqtt off") == 0) {
+    setObserverMqttEnabled(false);
+    strcpy(reply, "MQTT off");
+  } else if (strcmp(command, "mqtt status") == 0) {
+    snprintf(reply, 160, "MQTT:%s running:%u host:%s", getObserverMqttStatus(),
+             (unsigned int)mqtt_observer.isRunning(), _prefs.mqtt_host);
   }
 #endif
 #ifdef ENABLE_OBSERVER_SAVEPOINTS
@@ -2877,6 +2995,11 @@ void MyMesh::handleCommand(uint32_t sender_timestamp, char *command, char *reply
 void MyMesh::loop() {
 #if defined(ENABLE_OBSERVER_WEB_AP) && defined(ESP32)
   updateObserverWebMetrics();
+  if (observer_web_sta_running && WiFi.status() != WL_CONNECTED && (long)(millis() - observer_web_sta_next_attempt) >= 0) {
+    WiFi.mode(WIFI_STA);
+    WiFi.begin(_prefs.wifi_ssid, _prefs.wifi_password);
+    observer_web_sta_next_attempt = millis() + 10000UL;
+  }
 #endif
 #ifdef WITH_BRIDGE
   bridge.loop();
@@ -2932,7 +3055,7 @@ bool MyMesh::hasPendingWork() const {
   if (bridge.isRunning()) return true;  // bridge needs WiFi radio, can't sleep
 #endif
 #if defined(ENABLE_OBSERVER_WEB_AP) && defined(ESP32)
-  if (observer_web_ap_running) return true;
+  if (observer_web_ap_running || observer_web_sta_running) return true;
 #endif
 #if defined(WITH_MQTT_OBSERVER)
   if (mqtt_observer.isRunning()) return true;

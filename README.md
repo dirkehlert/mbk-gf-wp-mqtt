@@ -78,6 +78,12 @@ CLI-Kommandos:
 web.ap on
 web.ap status
 web.ap off
+web.view on
+web.view status
+web.view off
+mqtt on
+mqtt status
+mqtt off
 ```
 
 Alternativ kann der Field-Web-AP direkt am Geraet auf dem MQTT-Screen per
@@ -86,6 +92,16 @@ Doppelklick ein- und ausgeschaltet werden.
 Beim Start des AP wird MQTT beendet, weil der ESP32-WiFi-Mode auf Access Point
 wechselt. Beim Stop des AP wird MQTT wieder gestartet, sofern MQTT in den Prefs
 aktiviert ist.
+
+Der WLAN-Station-Viewmodus wird auf dem MQTT-Screen per Long Press aktiviert
+oder per `web.view on` gestartet. Dabei verbindet sich der Node mit dem
+konfigurierten WLAN und stellt dieselbe Webseite im lokalen Netz bereit. MQTT
+wird dabei persistent deaktiviert und bleibt aus, bis es explizit per `mqtt on`
+oder `set mqtt.enabled on` wieder aktiviert wird.
+
+Im Station-Viewmodus ist die Web-API read-only: Zeit- und Positionsaenderungen
+werden abgelehnt. `POST /api/savepoint` bleibt erlaubt, damit waehrend eines
+stationaeren Tests direkt ein Savepoint erzeugt werden kann.
 
 - SSID: `MBK-GF-WP`
 - Passwort: `observer2026`
@@ -309,6 +325,7 @@ Danach die Werte in `platformio.local.ini` anpassen. Diese Datei ist in
 - Langer Druck auf Status-Screen: Flood-Advert senden
 - Langer Druck auf Pfad-Screen: Hibernate
 - Langer Druck auf Heards-Screen: Repeater-Discovery / Find Nearby Nodes senden
+- Langer Druck auf MQTT-Screen: WLAN-Station-Viewmodus toggeln, MQTT bleibt aus
 - Langer Druck auf Savepoints-Screen: Live-Zaehler zuruecksetzen
 - Langer Druck auf MQTT-Screen: WLAN/MQTT toggeln
 

@@ -192,6 +192,8 @@ class MyMesh : public mesh::Mesh, public CommonCLICallbacks {
 #if defined(ENABLE_OBSERVER_WEB_AP) && defined(ESP32)
   AsyncWebServer* observer_web_server;
   bool observer_web_ap_running;
+  bool observer_web_sta_running;
+  unsigned long observer_web_sta_next_attempt;
   unsigned long observer_web_next_rollover;
   uint32_t observer_web_prev_rx_total;
   uint32_t observer_web_prev_air_ms;
@@ -332,6 +334,9 @@ public:
 #if defined(ENABLE_OBSERVER_WEB_AP) && defined(ESP32)
   bool startObserverWebAp(char* status, size_t status_size);
   void stopObserverWebAp();
+  bool startObserverWebStaView(char* status, size_t status_size);
+  void stopObserverWebStaView();
+  bool toggleObserverWebStaView(char* status, size_t status_size);
   bool toggleObserverWebAp(char* status, size_t status_size);
   void getObserverWebApLine(char* dest, size_t dest_size) const;
   void setObserverPosition(double lat, double lon);

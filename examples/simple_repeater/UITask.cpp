@@ -943,8 +943,12 @@ void UITask::loop() {
           }
 #else
           if (_screen == 6) {
+#if defined(ENABLE_OBSERVER_WEB_AP) && defined(ESP32)
+            _mesh->toggleObserverWebStaView(_status, sizeof(_status));
+#else
             bool enabled = _mesh->toggleObserverMqttEnabled();
             strcpy(_status, enabled ? "WiFi/MQTT on" : "WiFi/MQTT off");
+#endif
           } else if (_screen == 5) {
             _mesh->resetObserverLiveStats();
             syncObserverTotalsAfterReset();
