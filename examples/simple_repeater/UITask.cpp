@@ -391,7 +391,7 @@ void UITask::updateRxActivityBins() {
 #ifdef FIELD_MONITOR_LITE
       _screen == 1 || _screen == 2 || _screen == 3
 #else
-      _screen == 1 || _screen == 2 || _screen == 4
+      _screen == 1 || _screen == 2
 #endif
       )) {
     _next_refresh = 0;
@@ -475,7 +475,8 @@ void UITask::renderNetworkLoadScreen() {
     sum_ms += _airtime_bins[i];
   }
 
-  uint16_t now_pct_x10 = (uint16_t)((uint32_t)_airtime_bins[_activity_bin_index] * 1000UL / RX_ACTIVITY_BIN_MILLIS);
+  uint8_t latest_complete_idx = (_activity_bin_index + RX_ACTIVITY_BINS - 1) % RX_ACTIVITY_BINS;
+  uint16_t now_pct_x10 = (uint16_t)((uint32_t)_airtime_bins[latest_complete_idx] * 1000UL / RX_ACTIVITY_BIN_MILLIS);
   uint16_t avg_pct_x10 = (uint16_t)(sum_ms * 1000UL / ((uint32_t)RX_ACTIVITY_BIN_MILLIS * RX_ACTIVITY_BINS));
 
   char now_pct[8];
@@ -499,7 +500,7 @@ void UITask::renderNetworkLoadScreen() {
   _display->drawTextEllipsized(left, 28, legend_x - left - 2, line);
 
   for (uint8_t i = 0; i < RX_ACTIVITY_BINS; i++) {
-    uint8_t idx = (_activity_bin_index + i + 1) % RX_ACTIVITY_BINS;
+    uint8_t idx = (_activity_bin_index + i) % RX_ACTIVITY_BINS;
     uint16_t pct_x10 = (uint16_t)((uint32_t)_airtime_bins[idx] * 1000UL / RX_ACTIVITY_BIN_MILLIS);
     int bar_h = pct_x10 == 0 ? 0 : (int)((uint32_t)pct_x10 * chart_h / max_pct_x10);
     int x = left + i * (bar_w + bar_gap);
@@ -509,7 +510,7 @@ void UITask::renderNetworkLoadScreen() {
   _display->fillRect(left, chart_top, 1, chart_h + 1);
 
   _display->setCursor(legend_x, 42);
-  _display->print("Now");
+  _display->print("Last");
   _display->setCursor(legend_x, 53);
   _display->print(now_pct);
   _display->setCursor(legend_x, 68);
@@ -1040,7 +1041,7 @@ void UITask::loop() {
 #ifdef FIELD_MONITOR_LITE
       _screen == 1 || _screen == 2 || _screen == 3
 #else
-      _screen == 1 || _screen == 2 || _screen == 4
+      _screen == 1 || _screen == 2
 #endif
       )) {
     uint32_t rx_total = _mesh->getObserverRxPackets();

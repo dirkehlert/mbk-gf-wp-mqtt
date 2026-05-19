@@ -40,6 +40,7 @@
 
 #if defined(ENABLE_OBSERVER_WEB_AP) && defined(ESP32)
 class AsyncWebServer;
+class AsyncWebServerRequest;
 #endif
 
 #ifdef WITH_BRIDGE
@@ -166,10 +167,18 @@ class MyMesh : public mesh::Mesh, public CommonCLICallbacks {
   uint32_t observer_prev_health_min_heap;
   uint8_t observer_health_screen;
   uint8_t observer_prev_health_screen;
+  uint8_t observer_prev_health_web_state;
+  uint8_t observer_prev_health_web_active;
+  uint8_t observer_prev_health_web_rejects;
+  uint8_t observer_prev_health_web_last;
+  uint16_t observer_prev_health_web_last_age_s;
   bool observer_prev_health_valid;
   mesh::MainBoard* _board;
   ObserverPathInfo observer_paths[OBSERVER_PATH_HISTORY_SIZE];
   ObserverLastHopInfo observer_last_hops[OBSERVER_LAST_HOP_HISTORY_SIZE];
+#if defined(ESP32)
+  mutable portMUX_TYPE observer_lock = portMUX_INITIALIZER_UNLOCKED;
+#endif
 #ifdef ENABLE_OBSERVER_CLOCK_SYNC
   ObserverClockSyncSample observer_clock_sync_samples[OBSERVER_CLOCK_SYNC_SAMPLES];
 #endif
@@ -194,12 +203,18 @@ class MyMesh : public mesh::Mesh, public CommonCLICallbacks {
   bool observer_web_ap_running;
   bool observer_web_sta_running;
   unsigned long observer_web_sta_next_attempt;
+  unsigned long observer_web_sta_started_at;
   unsigned long observer_web_next_rollover;
   uint32_t observer_web_prev_rx_total;
   uint32_t observer_web_prev_air_ms;
   uint16_t observer_web_rx_bins[12];
   uint16_t observer_web_air_bins[12];
   uint8_t observer_web_bin_index;
+  bool observer_web_request_busy;
+  uint8_t observer_web_active_handler;
+  uint8_t observer_web_last_handler;
+  unsigned long observer_web_last_at;
+  uint8_t observer_web_rejects;
 #endif
 
   void putNeighbour(const mesh::Identity& id, uint32_t timestamp, float snr);
@@ -221,6 +236,8 @@ class MyMesh : public mesh::Mesh, public CommonCLICallbacks {
   String buildObserverWebMonitorJson() const;
   String buildObserverSavepointListCsv() const;
   void updateObserverWebMetrics();
+  bool beginObserverWebRequest(uint8_t handler, AsyncWebServerRequest* request);
+  void endObserverWebRequest();
 #endif
 
 protected:
@@ -348,6 +365,7 @@ public:
   void getObserverWebApLine(char* dest, size_t dest_size) const;
   void setObserverPosition(double lat, double lon);
   bool isObserverWebApRunning() const { return observer_web_ap_running; }
+  bool isObserverWebViewRunning() const { return observer_web_sta_running; }
 #endif
 
   void savePrefs() override {

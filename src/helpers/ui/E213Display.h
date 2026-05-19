@@ -25,6 +25,9 @@ class E213Display : public DisplayDriver {
   RefCountedDigitalPin* _periph_power;
   CRC32 display_crc;
   uint32_t last_display_crc_value = 0;
+  uint16_t partial_update_count = 0;
+  unsigned long last_full_refresh = 0;
+  bool force_full_refresh = true;
 
 public:
   E213Display(RefCountedDigitalPin* periph_power = NULL) : DisplayDriver(250, 122), _periph_power(periph_power) {}

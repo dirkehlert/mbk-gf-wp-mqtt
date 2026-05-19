@@ -77,6 +77,20 @@
 #ifndef OBSERVER_WEB_AP_PASSWORD
   #define OBSERVER_WEB_AP_PASSWORD "observer2026"
 #endif
+#ifndef OBSERVER_WEB_VIEW_RETRY_MS
+  #define OBSERVER_WEB_VIEW_RETRY_MS 10000UL
+#endif
+#ifndef OBSERVER_WEB_VIEW_FALLBACK_MS
+  #define OBSERVER_WEB_VIEW_FALLBACK_MS 120000UL
+#endif
+
+#if defined(ESP32)
+  #define OBSERVER_LOCK() portENTER_CRITICAL(&observer_lock)
+  #define OBSERVER_UNLOCK() portEXIT_CRITICAL(&observer_lock)
+#else
+  #define OBSERVER_LOCK()
+  #define OBSERVER_UNLOCK()
+#endif
 
 #ifndef SERVER_RESPONSE_DELAY
   #define SERVER_RESPONSE_DELAY 300
@@ -102,7 +116,11 @@ struct ObserverHealthBreadcrumb {
   uint32_t free_heap;
   uint32_t min_heap;
   uint8_t screen;
-  uint8_t reserved[3];
+  uint8_t web_state;
+  uint8_t web_active;
+  uint8_t web_rejects;
+  uint8_t web_last;
+  uint16_t web_last_age_s;
   uint32_t crc;
 };
 
@@ -120,6 +138,11 @@ static uint32_t observerHealthCrc(const ObserverHealthBreadcrumb& item) {
   crc ^= item.free_heap;
   crc ^= item.min_heap;
   crc ^= item.screen;
+  crc ^= item.web_state;
+  crc ^= item.web_active;
+  crc ^= item.web_rejects;
+  crc ^= item.web_last;
+  crc ^= item.web_last_age_s;
   return crc;
 }
 
@@ -279,7 +302,16 @@ function setPosition(){
     lat.value=p.coords.latitude.toFixed(6); lon.value=p.coords.longitude.toFixed(6); savePosition();
   },e=>msg(e.message,true),{enableHighAccuracy:true,timeout:15000,maximumAge:0});
 }
-refresh(); refreshMonitor(); setInterval(refresh,10000); setInterval(refreshMonitor,10000);
+let refreshBusy=false;
+async function refreshAll(){
+  if(refreshBusy) return;
+  refreshBusy=true;
+  try{await refresh();}
+  catch(e){msg(e.message,true)}
+  refreshBusy=false;
+}
+async function monitorTick(){try{await refreshMonitor();}catch(e){msg(e.message,true)}}
+refreshAll(); monitorTick(); setInterval(refreshAll,15000); setInterval(monitorTick,60000);
 </script></body></html>
 )HTML";
 
@@ -725,7 +757,9 @@ void MyMesh::logRxRaw(float snr, float rssi, const uint8_t raw[], int len) {
 }
 
 void MyMesh::logRx(mesh::Packet *pkt, int len, float score) {
+  OBSERVER_LOCK();
   observer_rx_packets++;
+  OBSERVER_UNLOCK();
   int snr_x4 = (int)(_radio->getLastSNR() * 4);
   if (snr_x4 > 127) snr_x4 = 127;
   if (snr_x4 < -128) snr_x4 = -128;
@@ -738,7 +772,9 @@ void MyMesh::logRx(mesh::Packet *pkt, int len, float score) {
 #endif
 #ifdef WITH_MQTT_OBSERVER
   if (mqtt_observer.sendPacket(pkt, true, (int)_radio->getLastRSSI(), snr_x4)) {
+    OBSERVER_LOCK();
     observer_mqtt_published++;
+    OBSERVER_UNLOCK();
   }
 #endif
 
@@ -1195,6 +1231,11 @@ MyMesh::MyMesh(mesh::MainBoard &board, mesh::Radio &radio, mesh::MillisecondCloc
   observer_health_screen = 0;
   observer_prev_health_valid = false;
   observer_prev_health_screen = 0;
+  observer_prev_health_web_state = 0;
+  observer_prev_health_web_active = 0;
+  observer_prev_health_web_rejects = 0;
+  observer_prev_health_web_last = 0;
+  observer_prev_health_web_last_age_s = 0;
   observer_prev_health_uptime_s = 0;
   observer_prev_health_rx = 0;
   observer_prev_health_free_heap = 0;
@@ -1204,10 +1245,16 @@ MyMesh::MyMesh(mesh::MainBoard &board, mesh::Radio &radio, mesh::MillisecondCloc
   observer_web_ap_running = false;
   observer_web_sta_running = false;
   observer_web_sta_next_attempt = 0;
+  observer_web_sta_started_at = 0;
   observer_web_next_rollover = 60000;
   observer_web_prev_rx_total = 0;
   observer_web_prev_air_ms = 0;
   observer_web_bin_index = 0;
+  observer_web_request_busy = false;
+  observer_web_active_handler = 0;
+  observer_web_last_handler = 0;
+  observer_web_last_at = 0;
+  observer_web_rejects = 0;
   memset(observer_web_rx_bins, 0, sizeof(observer_web_rx_bins));
   memset(observer_web_air_bins, 0, sizeof(observer_web_air_bins));
 #endif
@@ -1215,6 +1262,11 @@ MyMesh::MyMesh(mesh::MainBoard &board, mesh::Radio &radio, mesh::MillisecondCloc
   if (observerHealthValid(observer_health_breadcrumb)) {
     observer_prev_health_valid = true;
     observer_prev_health_screen = observer_health_breadcrumb.screen;
+    observer_prev_health_web_state = observer_health_breadcrumb.web_state;
+    observer_prev_health_web_active = observer_health_breadcrumb.web_active;
+    observer_prev_health_web_rejects = observer_health_breadcrumb.web_rejects;
+    observer_prev_health_web_last = observer_health_breadcrumb.web_last;
+    observer_prev_health_web_last_age_s = observer_health_breadcrumb.web_last_age_s;
     observer_prev_health_uptime_s = observer_health_breadcrumb.uptime_s;
     observer_prev_health_rx = observer_health_breadcrumb.rx_total;
     observer_prev_health_free_heap = observer_health_breadcrumb.free_heap;
@@ -1360,7 +1412,11 @@ void MyMesh::begin(FILESYSTEM *fs) {
   applyGpsPrefs();
 #endif
 
-#if defined(ENABLE_OBSERVER_WEB_AP) && defined(ESP32) && defined(OBSERVER_WEB_AP_DEFAULT_ON)
+#if defined(ENABLE_OBSERVER_WEB_AP) && defined(ESP32) && defined(OBSERVER_WEB_VIEW_DEFAULT_ON)
+  if (!startObserverWebStaView(nullptr, 0)) {
+    startObserverWebAp(nullptr, 0);
+  }
+#elif defined(ENABLE_OBSERVER_WEB_AP) && defined(ESP32) && defined(OBSERVER_WEB_AP_DEFAULT_ON)
   startObserverWebAp(nullptr, 0);
 #endif
 }
@@ -1495,12 +1551,14 @@ void MyMesh::rememberObserverPath(const mesh::Packet* packet) {
   key[key_pos] = 0;
 
   unsigned long now = millis();
+  OBSERVER_LOCK();
   for (uint8_t i = 0; i < OBSERVER_PATH_HISTORY_SIZE; i++) {
     ObserverPathInfo& existing = observer_paths[i];
     if (existing.seen_at == 0) continue;
     if (strcmp(existing.key, key) == 0) {
       existing.seen_at = now;
       if (existing.count < 0xFFFF) existing.count++;
+      OBSERVER_UNLOCK();
       return;
     }
   }
@@ -1526,6 +1584,7 @@ void MyMesh::rememberObserverPath(const mesh::Packet* packet) {
   item.count = 1;
   StrHelper::strncpy(item.text, text, sizeof(item.text));
   StrHelper::strncpy(item.key, key, sizeof(item.key));
+  OBSERVER_UNLOCK();
 }
 
 static void formatSnrX4(char* dest, size_t dest_size, int8_t snr_x4) {
@@ -1584,6 +1643,10 @@ bool MyMesh::getObserverPathLine(uint8_t index, char* dest, size_t dest_size) co
 
   uint8_t found = 0;
   unsigned long now = millis();
+  ObserverPathInfo paths[OBSERVER_PATH_HISTORY_SIZE];
+  OBSERVER_LOCK();
+  memcpy(paths, observer_paths, sizeof(paths));
+  OBSERVER_UNLOCK();
   bool selected[OBSERVER_PATH_HISTORY_SIZE];
   memset(selected, 0, sizeof(selected));
 
@@ -1593,7 +1656,7 @@ bool MyMesh::getObserverPathLine(uint8_t index, char* dest, size_t dest_size) co
     unsigned long best_seen = 0;
 
     for (uint8_t j = 0; j < OBSERVER_PATH_HISTORY_SIZE; j++) {
-      const ObserverPathInfo& item = observer_paths[j];
+      const ObserverPathInfo& item = paths[j];
       if (item.seen_at == 0) continue;
       if (selected[j]) continue;
 
@@ -1610,7 +1673,7 @@ bool MyMesh::getObserverPathLine(uint8_t index, char* dest, size_t dest_size) co
 
     selected[best] = true;
     if (found == index) {
-      const ObserverPathInfo& item = observer_paths[best];
+      const ObserverPathInfo& item = paths[best];
       char count_col[6];
       char age_col[5];
       unsigned long age_secs = (now - item.seen_at) / 1000;
@@ -1634,8 +1697,12 @@ bool MyMesh::getObserverLatestPathLine(char* dest, size_t dest_size) const {
 
   int best = -1;
   unsigned long best_seen = 0;
+  ObserverPathInfo paths[OBSERVER_PATH_HISTORY_SIZE];
+  OBSERVER_LOCK();
+  memcpy(paths, observer_paths, sizeof(paths));
+  OBSERVER_UNLOCK();
   for (uint8_t i = 0; i < OBSERVER_PATH_HISTORY_SIZE; i++) {
-    const ObserverPathInfo& item = observer_paths[i];
+    const ObserverPathInfo& item = paths[i];
     if (item.seen_at == 0) continue;
     if (item.seen_at > best_seen) {
       best = i;
@@ -1645,7 +1712,7 @@ bool MyMesh::getObserverLatestPathLine(char* dest, size_t dest_size) const {
 
   if (best < 0) return false;
 
-  const ObserverPathInfo& item = observer_paths[best];
+  const ObserverPathInfo& item = paths[best];
   char age_col[5];
   unsigned long age_secs = (millis() - item.seen_at) / 1000;
   formatAge(age_col, sizeof(age_col), age_secs);
@@ -1675,6 +1742,7 @@ void MyMesh::rememberObserverLastHop(const mesh::Packet* packet, int8_t snr_x4) 
   }
 
   unsigned long now = millis();
+  OBSERVER_LOCK();
   for (uint8_t i = 0; i < OBSERVER_LAST_HOP_HISTORY_SIZE; i++) {
     ObserverLastHopInfo& item = observer_last_hops[i];
     if (item.seen_at == 0) continue;
@@ -1682,6 +1750,7 @@ void MyMesh::rememberObserverLastHop(const mesh::Packet* packet, int8_t snr_x4) 
       item.seen_at = now;
       item.last_snr = snr_x4;
       if (snr_x4 > item.max_snr) item.max_snr = snr_x4;
+      OBSERVER_UNLOCK();
       return;
     }
   }
@@ -1706,6 +1775,7 @@ void MyMesh::rememberObserverLastHop(const mesh::Packet* packet, int8_t snr_x4) 
   item.max_snr = snr_x4;
   StrHelper::strncpy(item.text, text, sizeof(item.text));
   StrHelper::strncpy(item.key, key, sizeof(item.key));
+  OBSERVER_UNLOCK();
 }
 
 bool MyMesh::getObserverLastHopLine(uint8_t index, char* dest, size_t dest_size) const {
@@ -1714,6 +1784,12 @@ bool MyMesh::getObserverLastHopLine(uint8_t index, char* dest, size_t dest_size)
 
   uint8_t found = 0;
   unsigned long now = millis();
+  ObserverLastHopInfo last_hops[OBSERVER_LAST_HOP_HISTORY_SIZE];
+  ObserverPathInfo paths[OBSERVER_PATH_HISTORY_SIZE];
+  OBSERVER_LOCK();
+  memcpy(last_hops, observer_last_hops, sizeof(last_hops));
+  memcpy(paths, observer_paths, sizeof(paths));
+  OBSERVER_UNLOCK();
   bool selected[OBSERVER_LAST_HOP_HISTORY_SIZE];
   memset(selected, 0, sizeof(selected));
 
@@ -1722,7 +1798,7 @@ bool MyMesh::getObserverLastHopLine(uint8_t index, char* dest, size_t dest_size)
     unsigned long best_seen = 0;
 
     for (uint8_t j = 0; j < OBSERVER_LAST_HOP_HISTORY_SIZE; j++) {
-      const ObserverLastHopInfo& item = observer_last_hops[j];
+      const ObserverLastHopInfo& item = last_hops[j];
       if (item.seen_at == 0) continue;
       if (selected[j]) continue;
 
@@ -1736,7 +1812,7 @@ bool MyMesh::getObserverLastHopLine(uint8_t index, char* dest, size_t dest_size)
 
     selected[best] = true;
     if (found == index) {
-      const ObserverLastHopInfo& item = observer_last_hops[best];
+      const ObserverLastHopInfo& item = last_hops[best];
       char age_col[5];
       char max_col[8];
       char last_col[8];
@@ -1746,7 +1822,7 @@ bool MyMesh::getObserverLastHopLine(uint8_t index, char* dest, size_t dest_size)
       formatSnrX4(max_col, sizeof(max_col), item.max_snr);
       formatSnrX4(last_col, sizeof(last_col), item.last_snr);
       for (uint8_t k = 0; k < OBSERVER_PATH_HISTORY_SIZE; k++) {
-        const ObserverPathInfo& path = observer_paths[k];
+        const ObserverPathInfo& path = paths[k];
         if (path.seen_at == 0) continue;
         if (observerPathContainsToken(path.text, item.text)) path_count++;
       }
@@ -1796,9 +1872,31 @@ void MyMesh::getObserverHealthLine(char* dest, size_t dest_size) const {
     snprintf(up_col, sizeof(up_col), "%luh", (unsigned long)(up / 3600));
   }
 
-  snprintf(dest, dest_size, "Prev:S%u %s H:%luk/%luk RX:%lu",
+  const char* web_state = "off";
+  if (observer_prev_health_web_state & 0x02) {
+    web_state = (observer_prev_health_web_state & 0x04) ? "View+" : "View-";
+  } else if (observer_prev_health_web_state & 0x01) {
+    web_state = "AP";
+  }
+
+  char web_extra[24] = "";
+#if defined(ENABLE_OBSERVER_WEB_AP) && defined(ESP32)
+  if (observer_prev_health_web_active || observer_prev_health_web_rejects) {
+    snprintf(web_extra, sizeof(web_extra), " Q:%u/%u",
+             (unsigned int)observer_prev_health_web_active,
+             (unsigned int)observer_prev_health_web_rejects);
+  } else if (observer_prev_health_web_last && observer_prev_health_web_last_age_s < 600) {
+    snprintf(web_extra, sizeof(web_extra), " L:%u/%us",
+             (unsigned int)observer_prev_health_web_last,
+             (unsigned int)observer_prev_health_web_last_age_s);
+  }
+#endif
+
+  snprintf(dest, dest_size, "Prev:S%u %s W:%s%s H:%luk/%luk RX:%lu",
            (unsigned int)observer_prev_health_screen,
            up_col,
+           web_state,
+           web_extra,
            (unsigned long)(observer_prev_health_free_heap / 1024),
            (unsigned long)(observer_prev_health_min_heap / 1024),
            (unsigned long)observer_prev_health_rx);
@@ -1823,7 +1921,27 @@ void MyMesh::updateObserverHealth() {
   item.free_heap = ESP.getFreeHeap();
   item.min_heap = ESP.getMinFreeHeap();
   item.screen = observer_health_screen;
-  memset(item.reserved, 0, sizeof(item.reserved));
+  item.web_state = 0;
+#if defined(ENABLE_OBSERVER_WEB_AP) && defined(ESP32)
+  if (observer_web_ap_running) item.web_state |= 0x01;
+  if (observer_web_sta_running) item.web_state |= 0x02;
+  if (WiFi.status() == WL_CONNECTED) item.web_state |= 0x04;
+  if (WiFi.getMode() & WIFI_MODE_AP) item.web_state |= 0x08;
+  if (WiFi.getMode() & WIFI_MODE_STA) item.web_state |= 0x10;
+  OBSERVER_LOCK();
+  item.web_active = observer_web_active_handler;
+  item.web_rejects = observer_web_rejects;
+  item.web_last = observer_web_last_handler;
+  item.web_last_age_s = observer_web_last_at
+      ? (uint16_t)min(65535UL, (now - observer_web_last_at) / 1000UL)
+      : 65535;
+  OBSERVER_UNLOCK();
+#else
+  item.web_active = 0;
+  item.web_rejects = 0;
+  item.web_last = 0;
+  item.web_last_age_s = 65535;
+#endif
   item.crc = observerHealthCrc(item);
   observer_health_breadcrumb = item;
 #endif
@@ -2065,6 +2183,7 @@ String MyMesh::buildObserverSavepointListCsv() const {
 
 void MyMesh::updateObserverWebMetrics() {
   unsigned long now = millis();
+  OBSERVER_LOCK();
   while ((long)(now - observer_web_next_rollover) >= 0) {
     observer_web_bin_index = (observer_web_bin_index + 1) % 12;
     observer_web_rx_bins[observer_web_bin_index] = 0;
@@ -2086,12 +2205,14 @@ void MyMesh::updateObserverWebMetrics() {
     observer_web_air_bins[observer_web_bin_index] = value > UINT16_MAX ? UINT16_MAX : (uint16_t)value;
     observer_web_prev_air_ms = air_ms;
   }
+  OBSERVER_UNLOCK();
 }
 
 static void appendJsonString(String& body, const char* text);
 
 String MyMesh::buildObserverWebStatusJson() const {
   String body = "{\"node\":";
+  body.reserve(768);
   appendJsonString(body, _prefs.node_name);
   body += ",\"time\":";
   body += String((unsigned long)getRTCClock()->getCurrentTime());
@@ -2162,17 +2283,27 @@ static void appendJsonString(String& body, const char* text) {
 }
 
 String MyMesh::buildObserverWebMonitorJson() const {
+  uint16_t rx_bins[12];
+  uint16_t air_bins[12];
+  uint8_t bin_index;
+  OBSERVER_LOCK();
+  memcpy(rx_bins, observer_web_rx_bins, sizeof(rx_bins));
+  memcpy(air_bins, observer_web_air_bins, sizeof(air_bins));
+  bin_index = observer_web_bin_index;
+  OBSERVER_UNLOCK();
+
   String body = "{\"rx\":[";
+  body.reserve(1536);
   for (uint8_t i = 0; i < 12; i++) {
-    uint8_t idx = (observer_web_bin_index + i + 1) % 12;
+    uint8_t idx = (bin_index + i + 1) % 12;
     if (i) body += ",";
-    body += String((unsigned int)observer_web_rx_bins[idx]);
+    body += String((unsigned int)rx_bins[idx]);
   }
   body += "],\"airtime_ms\":[";
   for (uint8_t i = 0; i < 12; i++) {
-    uint8_t idx = (observer_web_bin_index + i + 1) % 12;
+    uint8_t idx = (bin_index + i + 1) % 12;
     if (i) body += ",";
-    body += String((unsigned int)observer_web_air_bins[idx]);
+    body += String((unsigned int)air_bins[idx]);
   }
   body += "],\"paths\":[";
   char line[96];
@@ -2285,6 +2416,39 @@ String MyMesh::buildObserverWebMonitorJson() const {
   return body;
 }
 
+bool MyMesh::beginObserverWebRequest(uint8_t handler, AsyncWebServerRequest* request) {
+  bool busy = false;
+  OBSERVER_LOCK();
+  if (observer_web_request_busy) {
+    busy = true;
+    if (observer_web_rejects < 255) observer_web_rejects++;
+  } else {
+    observer_web_request_busy = true;
+    observer_web_active_handler = handler;
+    observer_web_last_handler = handler;
+    observer_web_last_at = millis();
+  }
+  OBSERVER_UNLOCK();
+
+  observer_next_health_at = 0;
+  updateObserverHealth();
+
+  if (busy) {
+    if (request) request->send(429, "text/plain", "busy");
+    return false;
+  }
+  return true;
+}
+
+void MyMesh::endObserverWebRequest() {
+  OBSERVER_LOCK();
+  observer_web_request_busy = false;
+  observer_web_active_handler = 0;
+  OBSERVER_UNLOCK();
+  observer_next_health_at = 0;
+  updateObserverHealth();
+}
+
 void MyMesh::setupObserverWebRoutes() {
   if (!observer_web_server) return;
 
@@ -2293,11 +2457,23 @@ void MyMesh::setupObserverWebRoutes() {
   });
 
   observer_web_server->on("/api/status", HTTP_GET, [this](AsyncWebServerRequest* request) {
-    request->send(200, "application/json", buildObserverWebStatusJson());
+    if (!beginObserverWebRequest(2, request)) return;
+    String body = buildObserverWebStatusJson();
+    request->send(200, "application/json", body);
+    endObserverWebRequest();
   });
 
   observer_web_server->on("/api/monitor", HTTP_GET, [this](AsyncWebServerRequest* request) {
-    request->send(200, "application/json", buildObserverWebMonitorJson());
+    if (!beginObserverWebRequest(3, request)) return;
+    static String body;
+    static unsigned long body_at = 0;
+    unsigned long now = millis();
+    if (!body.length() || (long)(now - body_at) >= 55000L) {
+      body = buildObserverWebMonitorJson();
+      body_at = now;
+    }
+    endObserverWebRequest();
+    request->send(200, "application/json", body);
   });
 
   observer_web_server->on("/api/time", HTTP_POST, [this](AsyncWebServerRequest* request) {
@@ -2328,20 +2504,34 @@ void MyMesh::setupObserverWebRoutes() {
 
 #ifdef ENABLE_OBSERVER_SAVEPOINTS
   observer_web_server->on("/api/savepoint", HTTP_POST, [this](AsyncWebServerRequest* request) {
+    if (!beginObserverWebRequest(4, request)) return;
     char status[32];
     updateObserverWebMetrics();
-    bool ok = createObserverSavepoint(observer_web_rx_bins, observer_web_air_bins, 12, observer_web_bin_index,
-                                      status, sizeof(status));
+    uint16_t rx_bins[12];
+    uint16_t air_bins[12];
+    uint8_t bin_index;
+    OBSERVER_LOCK();
+    memcpy(rx_bins, observer_web_rx_bins, sizeof(rx_bins));
+    memcpy(air_bins, observer_web_air_bins, sizeof(air_bins));
+    bin_index = observer_web_bin_index;
+    OBSERVER_UNLOCK();
+    bool ok = createObserverSavepoint(rx_bins, air_bins, 12, bin_index, status, sizeof(status));
     request->send(ok ? 200 : 500, "text/plain", status[0] ? status : (ok ? "SP saved" : "SP save failed"));
+    endObserverWebRequest();
   });
 #endif
 
   observer_web_server->on("/sp.list.csv", HTTP_GET, [this](AsyncWebServerRequest* request) {
-    request->send(200, "text/csv", buildObserverSavepointListCsv());
+    if (!beginObserverWebRequest(5, request)) return;
+    String body = buildObserverSavepointListCsv();
+    request->send(200, "text/csv", body);
+    endObserverWebRequest();
   });
 
   observer_web_server->on("/sp.csv", HTTP_GET, [this](AsyncWebServerRequest* request) {
+    if (!beginObserverWebRequest(6, request)) return;
     if (!request->hasParam("id")) {
+      endObserverWebRequest();
       request->send(400, "text/plain", "missing id");
       return;
     }
@@ -2349,6 +2539,7 @@ void MyMesh::setupObserverWebRoutes() {
     char filename[16];
     formatSavepointFilename(filename, sizeof(filename), id);
     if (!_fs || !_fs->exists(filename)) {
+      endObserverWebRequest();
       request->send(404, "text/plain", "savepoint not found");
       return;
     }
@@ -2357,6 +2548,7 @@ void MyMesh::setupObserverWebRoutes() {
     AsyncWebServerResponse* response = request->beginResponse(*_fs, filename, "text/csv", true);
     response->addHeader("Content-Disposition", String("attachment; filename=\"") + download_name + "\"");
     request->send(response);
+    endObserverWebRequest();
   });
 }
 
@@ -2372,6 +2564,13 @@ bool MyMesh::startObserverWebAp(char* status, size_t status_size) {
 #ifdef WITH_MQTT_OBSERVER
   mqtt_observer.end();
 #endif
+  if (observer_web_server) {
+    observer_web_server->end();
+  }
+  WiFi.disconnect(true);
+  WiFi.softAPdisconnect(true);
+  WiFi.mode(WIFI_OFF);
+  delay(100);
   WiFi.mode(WIFI_AP);
   bool ok = WiFi.softAP(OBSERVER_WEB_AP_SSID, OBSERVER_WEB_AP_PASSWORD);
   if (!ok) {
@@ -2383,8 +2582,12 @@ bool MyMesh::startObserverWebAp(char* status, size_t status_size) {
     observer_web_server = new AsyncWebServer(80);
     setupObserverWebRoutes();
   }
+  delay(50);
   observer_web_server->begin();
   observer_web_ap_running = true;
+  observer_web_sta_running = false;
+  observer_web_sta_next_attempt = 0;
+  observer_web_sta_started_at = 0;
   if (status && status_size) snprintf(status, status_size, "AP http://%s", WiFi.softAPIP().toString().c_str());
   return true;
 }
@@ -2395,6 +2598,7 @@ void MyMesh::stopObserverWebAp() {
     observer_web_server->end();
   }
   WiFi.softAPdisconnect(true);
+  WiFi.disconnect(true);
   WiFi.mode(WIFI_OFF);
   observer_web_ap_running = false;
 #ifdef WITH_MQTT_OBSERVER
@@ -2425,15 +2629,25 @@ bool MyMesh::startObserverWebStaView(char* status, size_t status_size) {
     return false;
   }
 
+  if (observer_web_server) {
+    observer_web_server->end();
+  }
+  WiFi.softAPdisconnect(true);
+  WiFi.disconnect(true);
+  WiFi.mode(WIFI_OFF);
+  delay(100);
   WiFi.mode(WIFI_STA);
   WiFi.begin(_prefs.wifi_ssid, _prefs.wifi_password);
   if (!observer_web_server) {
     observer_web_server = new AsyncWebServer(80);
     setupObserverWebRoutes();
   }
+  delay(50);
   observer_web_server->begin();
   observer_web_sta_running = true;
-  observer_web_sta_next_attempt = millis() + 10000UL;
+  observer_web_ap_running = false;
+  observer_web_sta_started_at = millis();
+  observer_web_sta_next_attempt = millis() + OBSERVER_WEB_VIEW_RETRY_MS;
   if (status && status_size) snprintf(status, status_size, "View connecting");
   return true;
 }
@@ -2444,8 +2658,11 @@ void MyMesh::stopObserverWebStaView() {
     observer_web_server->end();
   }
   WiFi.disconnect(true);
+  WiFi.softAPdisconnect(true);
   WiFi.mode(WIFI_OFF);
   observer_web_sta_running = false;
+  observer_web_sta_next_attempt = 0;
+  observer_web_sta_started_at = 0;
 }
 
 void MyMesh::setObserverPosition(double lat, double lon) {
@@ -2495,10 +2712,12 @@ void MyMesh::getObserverWebApLine(char* dest, size_t dest_size) const {
 #endif
 
 void MyMesh::resetObserverLiveStats() {
+  OBSERVER_LOCK();
   observer_rx_packets = 0;
   observer_mqtt_published = 0;
   memset(observer_paths, 0, sizeof(observer_paths));
   memset(observer_last_hops, 0, sizeof(observer_last_hops));
+  OBSERVER_UNLOCK();
 }
 
 void MyMesh::hibernate() {
@@ -3013,9 +3232,15 @@ void MyMesh::loop() {
 #if defined(ENABLE_OBSERVER_WEB_AP) && defined(ESP32)
   updateObserverWebMetrics();
   if (observer_web_sta_running && WiFi.status() != WL_CONNECTED && (long)(millis() - observer_web_sta_next_attempt) >= 0) {
-    WiFi.mode(WIFI_STA);
-    WiFi.begin(_prefs.wifi_ssid, _prefs.wifi_password);
-    observer_web_sta_next_attempt = millis() + 10000UL;
+    unsigned long now = millis();
+    if (observer_web_sta_started_at && (long)(now - observer_web_sta_started_at) >= (long)OBSERVER_WEB_VIEW_FALLBACK_MS) {
+      startObserverWebAp(nullptr, 0);
+    } else {
+      WiFi.disconnect(false);
+      WiFi.mode(WIFI_STA);
+      WiFi.begin(_prefs.wifi_ssid, _prefs.wifi_password);
+      observer_web_sta_next_attempt = now + OBSERVER_WEB_VIEW_RETRY_MS;
+    }
   }
 #endif
 #ifdef WITH_BRIDGE

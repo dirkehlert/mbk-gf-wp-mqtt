@@ -84,6 +84,18 @@ struct AdvertPath {
   uint8_t path[MAX_PATH_SIZE];
 };
 
+enum QuickSendTargetType : uint8_t {
+  QUICK_SEND_CHANNEL = 0,
+  QUICK_SEND_CONTACT = 1
+};
+
+struct QuickSendTarget {
+  QuickSendTargetType type;
+  uint8_t index;
+  uint8_t pubkey_prefix[7];
+  char name[32];
+};
+
 #define MONITOR_PATH_HISTORY_SIZE       24
 #define MONITOR_PATH_TEXT_SIZE          36
 #define MONITOR_PATH_KEY_SIZE           (MAX_PATH_SIZE * 2 + 4)
@@ -125,6 +137,10 @@ public:
   void enterCLIRescue();
 
   int  getRecentlyHeard(AdvertPath dest[], int max_num);
+  int  getQuickSendTargets(QuickSendTarget dest[], int max_num);
+  uint8_t getQuickMessageCount() const;
+  const char* getQuickMessage(uint8_t index) const;
+  bool sendQuickText(const QuickSendTarget& target, const char* text, bool* sent_flood = NULL);
   uint32_t getMonitorRxPackets() const { return monitor_rx_packets; }
   int getMonitorNoiseFloor() const { return _radio->getNoiseFloor(); }
   float getMonitorLastSnr() const { return monitor_last_snr_x4 / 4.0f; }
@@ -133,6 +149,7 @@ public:
   bool getMonitorLatestPathLine(char* dest, size_t dest_size) const;
   bool getMonitorLastHopLine(uint8_t index, char* dest, size_t dest_size) const;
   uint8_t getMonitorActivity(uint16_t* dest, uint8_t max_count);
+  uint8_t getMonitorAirtime(uint16_t* dest, uint8_t max_count);
 
 protected:
   float getAirtimeBudgetFactor() const override;
@@ -228,6 +245,10 @@ private:
   void checkCLIRescueCmd();
   void checkSerialInterface();
   bool isValidClientRepeatFreq(uint32_t f) const;
+  void resetQuickMessages();
+  void loadQuickMessages();
+  bool saveQuickMessages();
+  void printQuickMessages();
   void monitorRollActivity();
   void rememberMonitorPath(const mesh::Packet* packet);
   void rememberMonitorLastHop(const mesh::Packet* packet, int8_t snr_x4);
@@ -251,7 +272,10 @@ private:
   uint32_t _active_ble_pin;
   bool _iter_started;
   bool _cli_rescue;
-  char cli_command[80];
+  char cli_command[128];
+  static const uint8_t QUICK_MESSAGE_SLOTS = 6;
+  static const uint8_t QUICK_MESSAGE_SIZE = 80;
+  char quick_messages[QUICK_MESSAGE_SLOTS][QUICK_MESSAGE_SIZE];
   uint8_t app_target_ver;
   uint8_t *sign_data;
   uint32_t sign_data_len;
@@ -289,6 +313,7 @@ private:
   MonitorPathInfo monitor_paths[MONITOR_PATH_HISTORY_SIZE];
   MonitorLastHopInfo monitor_last_hops[MONITOR_LAST_HOP_HISTORY_SIZE];
   uint16_t monitor_activity_bins[MONITOR_ACTIVITY_BINS];
+  uint16_t monitor_airtime_bins[MONITOR_ACTIVITY_BINS];
   uint8_t monitor_activity_index;
   unsigned long monitor_next_activity_rollover;
 };

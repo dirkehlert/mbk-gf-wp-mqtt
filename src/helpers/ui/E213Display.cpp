@@ -2,6 +2,14 @@
 
 #include "../../MeshCore.h"
 
+#ifndef E213_FULL_REFRESH_UPDATES
+#define E213_FULL_REFRESH_UPDATES 30
+#endif
+
+#ifndef E213_FULL_REFRESH_INTERVAL_MS
+#define E213_FULL_REFRESH_INTERVAL_MS 900000UL
+#endif
+
 BaseDisplay* E213Display::detectEInk()
 {
     // Test 1: Logic of BUSY pin
@@ -51,6 +59,9 @@ bool E213Display::begin() {
 
   _init = true;
   _isOn = true;
+  last_full_refresh = millis();
+  partial_update_count = 0;
+  force_full_refresh = false;
 
   clear();
   display->fastmodeOn(); // Enable fast mode for quicker (partial) updates
@@ -93,6 +104,7 @@ void E213Display::turnOn() {
   else if (!_isOn) {
     powerOn();
     display->fastmodeOn();  // Reinitialize display controller after power was cut
+    force_full_refresh = true;
   }
   _isOn = true;
 }
@@ -106,6 +118,10 @@ void E213Display::turnOff() {
 
 void E213Display::clear() {
   display->clear();
+  last_full_refresh = millis();
+  partial_update_count = 0;
+  force_full_refresh = false;
+  last_display_crc_value = 0;
 }
 
 void E213Display::startFrame(Color bkg) {
@@ -195,7 +211,21 @@ uint16_t E213Display::getTextWidth(const char *str) {
 void E213Display::endFrame() {
   uint32_t crc = display_crc.finalize();
   if (crc != last_display_crc_value) {
-    display->update();
+    bool do_full_refresh = force_full_refresh ||
+      partial_update_count >= E213_FULL_REFRESH_UPDATES ||
+      (long)(millis() - last_full_refresh) >= (long)E213_FULL_REFRESH_INTERVAL_MS;
+
+    if (do_full_refresh) {
+      display->fastmodeOff();
+      display->update();
+      display->fastmodeOn(false);
+      last_full_refresh = millis();
+      partial_update_count = 0;
+      force_full_refresh = false;
+    } else {
+      display->update();
+      partial_update_count++;
+    }
     last_display_crc_value = crc;
   }
 }

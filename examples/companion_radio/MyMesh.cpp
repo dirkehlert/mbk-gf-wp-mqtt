@@ -106,6 +106,7 @@
 #define LAZY_CONTACTS_WRITE_DELAY       5000
 
 #define PUBLIC_GROUP_PSK                "izOH6cXN6mrJ5e26oRXNcg=="
+#define QUICK_MESSAGES_FILE             "/quickmsg"
 
 // these are _pushed_ to client app at any time
 #define PUSH_CODE_ADVERT                0x80
@@ -321,6 +322,7 @@ void MyMesh::monitorRollActivity() {
   while ((long)(now - monitor_next_activity_rollover) >= 0) {
     monitor_activity_index = (monitor_activity_index + 1) % MONITOR_ACTIVITY_BINS;
     monitor_activity_bins[monitor_activity_index] = 0;
+    monitor_airtime_bins[monitor_activity_index] = 0;
     monitor_next_activity_rollover += MONITOR_ACTIVITY_BIN_MILLIS;
   }
 }
@@ -456,11 +458,13 @@ void MyMesh::rememberMonitorLastHop(const mesh::Packet* packet, int8_t snr_x4) {
 }
 
 void MyMesh::logRx(mesh::Packet* packet, int len, float score) {
-  (void)len;
   (void)score;
   monitorRollActivity();
   monitor_rx_packets++;
   monitor_activity_bins[monitor_activity_index]++;
+  uint32_t airtime_ms = _radio->getEstAirtimeFor(len);
+  uint32_t airtime_bin = (uint32_t)monitor_airtime_bins[monitor_activity_index] + airtime_ms;
+  monitor_airtime_bins[monitor_activity_index] = airtime_bin > UINT16_MAX ? UINT16_MAX : (uint16_t)airtime_bin;
   monitor_last_snr_x4 = (int8_t)(packet->getSNR() * 4);
   rememberMonitorPath(packet);
   rememberMonitorLastHop(packet, monitor_last_snr_x4);
@@ -607,7 +611,7 @@ bool MyMesh::getMonitorLastHopLine(uint8_t index, char* dest, size_t dest_size) 
       formatMonitorAge(age_col, sizeof(age_col), age_secs);
       formatMonitorSnrX4(max_col, sizeof(max_col), item.max_snr);
       formatMonitorSnrX4(last_col, sizeof(last_col), item.last_snr);
-      snprintf(dest, dest_size, "Rep %s %s %s/%s", item.text, age_col, max_col, last_col);
+      snprintf(dest, dest_size, "%6s %s %s/%s", item.text, age_col, max_col, last_col);
       return true;
     }
     found++;
@@ -620,8 +624,19 @@ uint8_t MyMesh::getMonitorActivity(uint16_t* dest, uint8_t max_count) {
   monitorRollActivity();
   uint8_t count = min(max_count, (uint8_t)MONITOR_ACTIVITY_BINS);
   for (uint8_t i = 0; i < count; i++) {
-    uint8_t idx = (monitor_activity_index + MONITOR_ACTIVITY_BINS - i) % MONITOR_ACTIVITY_BINS;
+    uint8_t idx = (monitor_activity_index + MONITOR_ACTIVITY_BINS - count + 1 + i) % MONITOR_ACTIVITY_BINS;
     dest[i] = monitor_activity_bins[idx];
+  }
+  return count;
+}
+
+uint8_t MyMesh::getMonitorAirtime(uint16_t* dest, uint8_t max_count) {
+  if (!dest || max_count == 0) return 0;
+  monitorRollActivity();
+  uint8_t count = min(max_count, (uint8_t)MONITOR_ACTIVITY_BINS);
+  for (uint8_t i = 0; i < count; i++) {
+    uint8_t idx = (monitor_activity_index + MONITOR_ACTIVITY_BINS - count + 1 + i) % MONITOR_ACTIVITY_BINS;
+    dest[i] = monitor_airtime_bins[idx];
   }
   return count;
 }
@@ -731,6 +746,177 @@ int MyMesh::getRecentlyHeard(AdvertPath dest[], int max_num) {
     dest[i] = advert_paths[i];
   }
   return max_num;
+}
+
+int MyMesh::getQuickSendTargets(QuickSendTarget dest[], int max_num) {
+  if (!dest || max_num <= 0) return 0;
+
+  int count = 0;
+#ifdef MAX_GROUP_CHANNELS
+  for (int i = 0; i < MAX_GROUP_CHANNELS && count < max_num; i++) {
+    ChannelDetails channel;
+    if (getChannel(i, channel) && channel.name[0]) {
+      QuickSendTarget* t = &dest[count++];
+      memset(t, 0, sizeof(*t));
+      t->type = QUICK_SEND_CHANNEL;
+      t->index = i;
+      StrHelper::strncpy(t->name, channel.name, sizeof(t->name));
+    }
+  }
+#endif
+
+  AdvertPath recent[ADVERT_PATH_TABLE_SIZE];
+  int recent_count = getRecentlyHeard(recent, ADVERT_PATH_TABLE_SIZE);
+  for (int i = 0; i < recent_count && count < max_num; i++) {
+    if (recent[i].name[0] == 0 || recent[i].recv_timestamp == 0) continue;
+    bool duplicate = false;
+    for (int j = 0; j < count; j++) {
+      if (dest[j].type == QUICK_SEND_CONTACT &&
+          memcmp(dest[j].pubkey_prefix, recent[i].pubkey_prefix, sizeof(dest[j].pubkey_prefix)) == 0) {
+        duplicate = true;
+        break;
+      }
+    }
+    if (duplicate) continue;
+
+    QuickSendTarget* t = &dest[count++];
+    memset(t, 0, sizeof(*t));
+    t->type = QUICK_SEND_CONTACT;
+    t->index = i;
+    memcpy(t->pubkey_prefix, recent[i].pubkey_prefix, sizeof(t->pubkey_prefix));
+    StrHelper::strncpy(t->name, recent[i].name, sizeof(t->name));
+  }
+
+  return count;
+}
+
+bool MyMesh::sendQuickText(const QuickSendTarget& target, const char* text, bool* sent_flood) {
+  if (sent_flood) *sent_flood = false;
+  if (!text || !text[0]) return false;
+
+  uint32_t msg_timestamp = getRTCClock()->getCurrentTimeUnique();
+  if (target.type == QUICK_SEND_CHANNEL) {
+    ChannelDetails channel;
+    if (!getChannel(target.index, channel) || channel.name[0] == 0) return false;
+    if (!sendGroupMessage(msg_timestamp, channel.channel, _prefs.node_name, text, strlen(text))) return false;
+
+    int i = 0;
+    if (app_target_ver >= 3) {
+      out_frame[i++] = RESP_CODE_CHANNEL_MSG_RECV_V3;
+      out_frame[i++] = 0; // local echo has no RX SNR
+      out_frame[i++] = 0;
+      out_frame[i++] = 0;
+    } else {
+      out_frame[i++] = RESP_CODE_CHANNEL_MSG_RECV;
+    }
+
+    out_frame[i++] = target.index;
+    out_frame[i++] = 0xFF; // local / direct-to-channel echo
+    out_frame[i++] = TXT_TYPE_PLAIN;
+    memcpy(&out_frame[i], &msg_timestamp, 4);
+    i += 4;
+
+    char local_text[MAX_TEXT_LEN + 1];
+    snprintf(local_text, sizeof(local_text), "%s: %s", _prefs.node_name, text);
+    int tlen = strlen(local_text);
+    if (i + tlen > MAX_FRAME_SIZE) tlen = MAX_FRAME_SIZE - i;
+    memcpy(&out_frame[i], local_text, tlen);
+    i += tlen;
+    addToOfflineQueue(out_frame, i);
+
+    if (_serial->isConnected()) {
+      uint8_t frame[1];
+      frame[0] = PUSH_CODE_MSG_WAITING;
+      _serial->writeFrame(frame, 1);
+    }
+    return true;
+  }
+
+  ContactInfo* recipient = lookupContactByPubKey(target.pubkey_prefix, sizeof(target.pubkey_prefix));
+  if (!recipient) return false;
+
+  uint32_t expected_ack = 0;
+  uint32_t est_timeout = 0;
+  int result = sendMessage(*recipient, msg_timestamp, 0, text, expected_ack, est_timeout);
+  if (result == MSG_SEND_FAILED) return false;
+
+  if (sent_flood) *sent_flood = (result == MSG_SEND_SENT_FLOOD);
+  if (expected_ack) {
+    expected_ack_table[next_ack_idx].msg_sent = _ms->getMillis();
+    expected_ack_table[next_ack_idx].ack = expected_ack;
+    expected_ack_table[next_ack_idx].contact = recipient;
+    next_ack_idx = (next_ack_idx + 1) % EXPECTED_ACK_TABLE_SIZE;
+  }
+  return true;
+}
+
+static bool readTextLine(File& file, char* dest, size_t dest_size) {
+  if (!dest || dest_size == 0) return false;
+  size_t pos = 0;
+  bool got = false;
+  while (file.available()) {
+    char c = (char)file.read();
+    if (c == '\r') continue;
+    if (c == '\n') break;
+    got = true;
+    if (pos + 1 < dest_size) dest[pos++] = c;
+  }
+  dest[pos] = 0;
+  return got || pos > 0;
+}
+
+void MyMesh::resetQuickMessages() {
+  static const char* defaults[] = {
+    "Bin QRV",
+    "Bin unterwegs",
+    "Komme gleich",
+    "Bitte wiederholen",
+    "Alles ok",
+    "Danke"
+  };
+  for (uint8_t i = 0; i < QUICK_MESSAGE_SLOTS; i++) {
+    StrHelper::strncpy(quick_messages[i], defaults[i], sizeof(quick_messages[i]));
+  }
+}
+
+void MyMesh::loadQuickMessages() {
+  resetQuickMessages();
+  if (!_store) return;
+
+  File file = _store->openRead(QUICK_MESSAGES_FILE);
+  if (!file) return;
+  for (uint8_t i = 0; i < QUICK_MESSAGE_SLOTS; i++) {
+    if (!readTextLine(file, quick_messages[i], sizeof(quick_messages[i]))) break;
+  }
+  file.close();
+}
+
+bool MyMesh::saveQuickMessages() {
+  if (!_store) return false;
+  File file = _store->openWriteFile(QUICK_MESSAGES_FILE);
+  if (!file) return false;
+  for (uint8_t i = 0; i < QUICK_MESSAGE_SLOTS; i++) {
+    file.print(quick_messages[i]);
+    file.print('\n');
+  }
+  file.close();
+  return true;
+}
+
+uint8_t MyMesh::getQuickMessageCount() const {
+  return QUICK_MESSAGE_SLOTS;
+}
+
+const char* MyMesh::getQuickMessage(uint8_t index) const {
+  if (index >= QUICK_MESSAGE_SLOTS) return "";
+  return quick_messages[index];
+}
+
+void MyMesh::printQuickMessages() {
+  for (uint8_t i = 0; i < QUICK_MESSAGE_SLOTS; i++) {
+    Serial.printf("  %u: %s\n", (unsigned int)i + 1, quick_messages[i][0] ? quick_messages[i] : "<leer>");
+  }
+  Serial.println("  gps: Meine Position ist: <lat>, <lon>");
 }
 
 void MyMesh::onContactPathUpdated(const ContactInfo &contact) {
@@ -1197,6 +1383,8 @@ MyMesh::MyMesh(mesh::Radio &radio, mesh::RNG &rng, mesh::RTCClock &rtc, SimpleMe
   memset(monitor_paths, 0, sizeof(monitor_paths));
   memset(monitor_last_hops, 0, sizeof(monitor_last_hops));
   memset(monitor_activity_bins, 0, sizeof(monitor_activity_bins));
+  memset(monitor_airtime_bins, 0, sizeof(monitor_airtime_bins));
+  resetQuickMessages();
 
   // defaults
   memset(&_prefs, 0, sizeof(_prefs));
@@ -1291,6 +1479,7 @@ void MyMesh::begin(bool has_display) {
   bootstrapRTCfromContacts();
   addChannel("Public", PUBLIC_GROUP_PSK); // pre-configure Andy's public channel
   _store->loadChannels(this);
+  loadQuickMessages();
 
   radio_set_params(_prefs.freq, _prefs.bw, _prefs.sf, _prefs.cr);
   radio_set_tx_power(_prefs.tx_power_dbm);
@@ -2325,6 +2514,53 @@ void MyMesh::checkCLIRescueCmd() {
       } else {
         Serial.printf("  Error: unknown config: %s\n", config);
       }
+    } else if (strcmp(cli_command, "qm.list") == 0) {
+      printQuickMessages();
+    } else if (memcmp(cli_command, "qm.set ", 7) == 0) {
+      char* cursor = &cli_command[7];
+      int slot = atoi(cursor);
+      while (*cursor && *cursor != ' ') cursor++;
+      while (*cursor == ' ') cursor++;
+      if (slot < 1 || slot > QUICK_MESSAGE_SLOTS || !cursor[0]) {
+        Serial.printf("  Usage: qm.set <1-%u> <text>\n", (unsigned int)QUICK_MESSAGE_SLOTS);
+      } else {
+        StrHelper::strncpy(quick_messages[slot - 1], cursor, sizeof(quick_messages[slot - 1]));
+        if (saveQuickMessages()) {
+          Serial.printf("  > qm %d saved\n", slot);
+        } else {
+          Serial.println("  Error: save failed");
+        }
+      }
+    } else if (memcmp(cli_command, "qm.clear ", 9) == 0) {
+      int slot = atoi(&cli_command[9]);
+      if (slot < 1 || slot > QUICK_MESSAGE_SLOTS) {
+        Serial.printf("  Usage: qm.clear <1-%u>\n", (unsigned int)QUICK_MESSAGE_SLOTS);
+      } else {
+        quick_messages[slot - 1][0] = 0;
+        if (saveQuickMessages()) {
+          Serial.printf("  > qm %d cleared\n", slot);
+        } else {
+          Serial.println("  Error: save failed");
+        }
+      }
+    } else if (strcmp(cli_command, "qm.reset") == 0) {
+      resetQuickMessages();
+      if (saveQuickMessages()) {
+        Serial.println("  > quick messages reset");
+      } else {
+        Serial.println("  Error: save failed");
+      }
+    } else if (strcmp(cli_command, "help") == 0 || strcmp(cli_command, "?") == 0) {
+      Serial.println("Commands:");
+      Serial.println("  qm.list");
+      Serial.printf("  qm.set <1-%u> <text>\n", (unsigned int)QUICK_MESSAGE_SLOTS);
+      Serial.printf("  qm.clear <1-%u>\n", (unsigned int)QUICK_MESSAGE_SLOTS);
+      Serial.println("  qm.reset");
+      Serial.println("  set pin <123456>");
+      Serial.println("  ls [UserData/|ExtraFS/]");
+      Serial.println("  cat UserData/<file>");
+      Serial.println("  rm <file>");
+      Serial.println("  reboot");
     } else if (strcmp(cli_command, "rebuild") == 0) {
       bool success = _store->formatFileSystem();
       if (success) {
@@ -2501,11 +2737,8 @@ void MyMesh::checkSerialInterface() {
 void MyMesh::loop() {
   BaseChatMesh::loop();
 
-  if (_cli_rescue) {
-    checkCLIRescueCmd();
-  } else {
-    checkSerialInterface();
-  }
+  checkCLIRescueCmd();
+  if (!_cli_rescue) checkSerialInterface();
 
   // is there are pending dirty contacts write needed?
   if (dirty_contacts_expiry && millisHasNowPassed(dirty_contacts_expiry)) {

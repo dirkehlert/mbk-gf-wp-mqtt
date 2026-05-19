@@ -75,14 +75,57 @@ public:
   }
 };
 
+static void formatLoadPct(char* dest, size_t dest_size, uint16_t pct_x10) {
+  if (!dest || dest_size == 0) return;
+  if (pct_x10 > 999) {
+    snprintf(dest, dest_size, ">99%%");
+  } else if (pct_x10 >= 100) {
+    snprintf(dest, dest_size, "%u%%", (unsigned int)((pct_x10 + 5) / 10));
+  } else {
+    snprintf(dest, dest_size, "%u.%u%%", (unsigned int)(pct_x10 / 10), (unsigned int)(pct_x10 % 10));
+  }
+}
+
+static bool nextPathToken(char*& cursor, char* dest, size_t dest_size) {
+  if (!cursor || !dest || dest_size == 0) return false;
+  while (*cursor == ' ') cursor++;
+  if (*cursor == 0) return false;
+  size_t pos = 0;
+  while (*cursor && *cursor != ' ') {
+    if (pos + 1 < dest_size) dest[pos++] = *cursor;
+    cursor++;
+  }
+  dest[pos] = 0;
+  return pos > 0;
+}
+
+static void drawHeatCell(DisplayDriver& display, int x, int y, int w, uint8_t position) {
+  switch (position) {
+    case 1:
+      display.fillRect(x, y + 1, w, 5);
+      break;
+    case 2:
+      display.fillRect(x, y + 1, w, 2);
+      display.fillRect(x, y + 4, w, 2);
+      break;
+    case 3:
+      display.fillRect(x, y + 3, w, 2);
+      break;
+    default:
+      display.fillRect(x + (w / 2), y + 3, 1, 1);
+      break;
+  }
+}
+
 class HomeScreen : public UIScreen {
   enum HomePage {
     FIRST,
+    SEND,
     RECENT,
     RADIO,
-    PATHS,
+    HEATSTRIP,
     HEARDS,
-    HISTOGRAM,
+    LOAD,
     BLUETOOTH,
     ADVERT,
 #if ENV_INCLUDE_GPS == 1
@@ -102,6 +145,271 @@ class HomeScreen : public UIScreen {
   uint8_t _page;
   bool _shutdown_init;
   AdvertPath recent[UI_RECENT_LIST_SIZE];
+
+  static const uint8_t HEAT_ROWS = 6;
+  static const uint8_t HEAT_PATHS = 8;
+  static const uint8_t SEND_TARGETS = 8;
+  static const uint8_t SEND_MESSAGES = 7; // six editable messages plus GPS position
+
+  enum SendMode {
+    SEND_MODE_NAV,
+    SEND_MODE_TARGET,
+    SEND_MODE_MESSAGE
+  };
+
+  QuickSendTarget send_targets[SEND_TARGETS];
+  uint8_t send_target_count = 0;
+  uint8_t send_target_idx = 0;
+  uint8_t send_msg_idx = 0;
+  SendMode send_mode = SEND_MODE_NAV;
+
+  uint8_t getGpsMessageIndex() const {
+    return the_mesh.getQuickMessageCount();
+  }
+
+  uint8_t getSendMessageCount() const {
+    uint8_t count = the_mesh.getQuickMessageCount() + 1;
+    return count > SEND_MESSAGES ? SEND_MESSAGES : count;
+  }
+
+  const char* getSendMessage(uint8_t index) const {
+    if (index == getGpsMessageIndex()) return "Meine Position";
+    return the_mesh.getQuickMessage(index);
+  }
+
+  bool buildSendMessage(uint8_t index, char* dest, size_t dest_size) const {
+    if (!dest || dest_size == 0) return false;
+    dest[0] = 0;
+    if (index != getGpsMessageIndex()) {
+      snprintf(dest, dest_size, "%s", getSendMessage(index));
+      return dest[0] != 0;
+    }
+
+#if ENV_INCLUDE_GPS == 1
+    LocationProvider* gps = _sensors ? _sensors->getLocationProvider() : nullptr;
+    if (!gps || !gps->isValid()) return false;
+    double lat = ((double)gps->getLatitude()) / 1000000.0;
+    double lon = ((double)gps->getLongitude()) / 1000000.0;
+    snprintf(dest, dest_size, "Meine Position ist: %.6f, %.6f", lat, lon);
+    return true;
+#else
+    return false;
+#endif
+  }
+
+  struct HeatRow {
+    char rep[7];
+    uint8_t position[HEAT_PATHS];
+    uint8_t pc;
+  };
+
+  void renderHeatstrip(DisplayDriver& display) {
+    HeatRow rows[HEAT_ROWS];
+    char paths[HEAT_PATHS][32];
+    uint8_t row_count = 0;
+    uint8_t path_count = 0;
+    memset(rows, 0, sizeof(rows));
+    memset(paths, 0, sizeof(paths));
+
+    char line[80];
+    for (uint8_t i = 0; i < HEAT_PATHS; i++) {
+      if (!the_mesh.getMonitorPathLine(i, line, sizeof(line))) continue;
+
+      char work[80];
+      snprintf(work, sizeof(work), "%s", line);
+      char* cursor = work;
+      char token[12];
+      if (!nextPathToken(cursor, token, sizeof(token))) continue;  // count
+
+      uint8_t position = 1;
+      while (nextPathToken(cursor, token, sizeof(token))) {
+        if (strcmp(token, "-") == 0 || strcmp(token, "+") == 0) continue;
+        if (paths[path_count][0]) strncat(paths[path_count], " ", sizeof(paths[path_count]) - strlen(paths[path_count]) - 1);
+        strncat(paths[path_count], token, sizeof(paths[path_count]) - strlen(paths[path_count]) - 1);
+
+        int row = -1;
+        for (uint8_t r = 0; r < row_count; r++) {
+          if (strcmp(rows[r].rep, token) == 0) {
+            row = r;
+            break;
+          }
+        }
+        if (row < 0 && row_count < HEAT_ROWS) {
+          row = row_count++;
+          snprintf(rows[row].rep, sizeof(rows[row].rep), "%s", token);
+        }
+        if (row >= 0) {
+          rows[row].position[path_count] = position;
+        }
+        if (position < 3) position++;
+      }
+      if (paths[path_count][0]) path_count++;
+    }
+
+    for (uint8_t r = 0; r < row_count; r++) {
+      uint8_t pc = 0;
+      for (uint8_t p = 0; p < path_count; p++) {
+        char path_copy[32];
+        snprintf(path_copy, sizeof(path_copy), "%s", paths[p]);
+        char* cursor = path_copy;
+        char token[12];
+        while (nextPathToken(cursor, token, sizeof(token))) {
+          if (strcmp(token, rows[r].rep) == 0) {
+            pc++;
+            break;
+          }
+        }
+      }
+      rows[r].pc = pc;
+    }
+
+    for (uint8_t i = 0; i < row_count; i++) {
+      for (uint8_t j = i + 1; j < row_count; j++) {
+        if (rows[j].pc > rows[i].pc) {
+          HeatRow tmp = rows[i];
+          rows[i] = rows[j];
+          rows[j] = tmp;
+        }
+      }
+    }
+
+    display.setColor(DisplayDriver::GREEN);
+    display.setTextSize(1);
+    display.setCursor(0, 20);
+    display.print("Heatstrip");
+    display.setColor(DisplayDriver::LIGHT);
+    if (row_count == 0) {
+      display.drawTextEllipsized(0, 38, display.width(), "No RX paths");
+      return;
+    }
+
+    const int rep_w = 30;
+    const int pc_right = display.width() - 4;
+    const int pc_left = pc_right - display.getTextWidth("PC");
+    const int grid_left = rep_w + 1;
+    const int grid_right = pc_left - 4;
+    const int gap = 1;
+    int pitch = (grid_right - grid_left + 1) / HEAT_PATHS;
+    if (pitch < 4) pitch = 4;
+    int block_w = pitch - gap;
+    if (block_w < 3) block_w = 3;
+
+    display.drawTextEllipsized(0, 31, rep_w, "Rep");
+    for (uint8_t p = 0; p < HEAT_PATHS; p++) {
+      int x = grid_left + p * pitch + block_w / 2;
+      display.fillRect(x, 36, 1, 2);
+    }
+    display.drawTextRightAlign(pc_right, 31, "PC");
+
+    for (uint8_t r = 0; r < row_count; r++) {
+      int y = 44 + r * 10;
+      display.drawTextRightAlign(rep_w - 3, y, rows[r].rep);
+      for (uint8_t p = 0; p < HEAT_PATHS; p++) {
+        int x = grid_left + p * pitch;
+        drawHeatCell(display, x, y, block_w, rows[r].position[p]);
+      }
+      char pc[4];
+      snprintf(pc, sizeof(pc), "%u", (unsigned int)rows[r].pc);
+      display.drawTextRightAlign(pc_right, y, pc);
+    }
+  }
+
+  void renderLoad(DisplayDriver& display) {
+    uint16_t bins[MONITOR_ACTIVITY_BINS];
+    uint8_t bin_count = the_mesh.getMonitorAirtime(bins, MONITOR_ACTIVITY_BINS);
+    uint16_t max_pct_x10 = 1;
+    uint32_t sum_ms = 0;
+
+    for (uint8_t i = 0; i < bin_count; i++) {
+      uint16_t pct_x10 = (uint16_t)((uint32_t)bins[i] * 1000UL / MONITOR_ACTIVITY_BIN_MILLIS);
+      if (pct_x10 > max_pct_x10) max_pct_x10 = pct_x10;
+      sum_ms += bins[i];
+    }
+
+    uint16_t now_pct_x10 = bin_count == 0 ? 0 : (uint16_t)((uint32_t)bins[bin_count - 1] * 1000UL / MONITOR_ACTIVITY_BIN_MILLIS);
+    uint16_t avg_pct_x10 = bin_count == 0 ? 0 : (uint16_t)(sum_ms * 1000UL / ((uint32_t)MONITOR_ACTIVITY_BIN_MILLIS * bin_count));
+    char now_pct[8];
+    char max_pct[8];
+    char avg_pct[8];
+    formatLoadPct(now_pct, sizeof(now_pct), now_pct_x10);
+    formatLoadPct(max_pct, sizeof(max_pct), max_pct_x10);
+    formatLoadPct(avg_pct, sizeof(avg_pct), avg_pct_x10);
+
+    display.setColor(DisplayDriver::GREEN);
+    display.setTextSize(1);
+    display.setCursor(0, 20);
+    display.print("Load");
+    display.setColor(DisplayDriver::LIGHT);
+    char line[48];
+    snprintf(line, sizeof(line), "Now %s Max %s", now_pct, max_pct);
+    display.drawTextEllipsized(0, 32, display.width(), line);
+    snprintf(line, sizeof(line), "Avg %s / airtime", avg_pct);
+    display.drawTextEllipsized(0, 43, display.width(), line);
+
+    const int chart_top = 58;
+    const int chart_bottom = 94;
+    const int chart_h = chart_bottom - chart_top;
+    const int chart_w = display.width() - 2;
+    const int gap = 2;
+    int bar_w = bin_count == 0 ? 5 : (chart_w - (bin_count - 1) * gap) / bin_count;
+    if (bar_w < 3) bar_w = 3;
+
+    for (uint8_t i = 0; i < bin_count; i++) {
+      uint16_t pct_x10 = (uint16_t)((uint32_t)bins[i] * 1000UL / MONITOR_ACTIVITY_BIN_MILLIS);
+      int bar_h = pct_x10 == 0 ? 0 : (int)((uint32_t)pct_x10 * chart_h / max_pct_x10);
+      int x = i * (bar_w + gap);
+      if (bar_h > 0) display.fillRect(x, chart_bottom - bar_h, bar_w, bar_h);
+    }
+    display.fillRect(0, chart_bottom, chart_w, 1);
+    display.fillRect(0, chart_top, 1, chart_h + 1);
+  }
+
+  void refreshSendTargets() {
+    send_target_count = the_mesh.getQuickSendTargets(send_targets, SEND_TARGETS);
+    if (send_target_count == 0) {
+      send_target_idx = 0;
+    } else if (send_target_idx >= send_target_count) {
+      send_target_idx = send_target_count - 1;
+    }
+  }
+
+  void renderSend(DisplayDriver& display) {
+    refreshSendTargets();
+
+    display.setTextSize(1);
+    display.setColor(DisplayDriver::GREEN);
+    display.setCursor(0, 20);
+    display.print("Send");
+
+    char line[64];
+    display.setColor(send_mode == SEND_MODE_TARGET ? DisplayDriver::YELLOW : DisplayDriver::LIGHT);
+    display.drawTextEllipsized(0, 33, display.width(), "To");
+    if (send_target_count == 0) {
+      snprintf(line, sizeof(line), "-");
+    } else {
+      const QuickSendTarget& target = send_targets[send_target_idx];
+      char filtered_name[sizeof(target.name)];
+      display.translateUTF8ToBlocks(filtered_name, target.name, sizeof(filtered_name));
+      snprintf(line, sizeof(line), "%s %s",
+               target.type == QUICK_SEND_CHANNEL ? "#" : "@",
+               filtered_name);
+    }
+    display.drawTextEllipsized(18, 33, display.width() - 18, line);
+
+    display.setColor(send_mode == SEND_MODE_MESSAGE ? DisplayDriver::YELLOW : DisplayDriver::LIGHT);
+    uint8_t send_msg_count = getSendMessageCount();
+    if (send_msg_idx >= send_msg_count) send_msg_idx = send_msg_count - 1;
+    snprintf(line, sizeof(line), "Msg %u/%u", (unsigned int)send_msg_idx + 1, (unsigned int)send_msg_count);
+    display.drawTextEllipsized(0, 52, display.width(), line);
+    display.setColor(DisplayDriver::LIGHT);
+    display.drawTextEllipsized(0, 66, display.width(), getSendMessage(send_msg_idx));
+
+    display.setColor(DisplayDriver::GREEN);
+    const char* action = "hold: target";
+    if (send_mode == SEND_MODE_TARGET) action = "hold: msg";
+    else if (send_mode == SEND_MODE_MESSAGE) action = "hold: send";
+    display.drawTextCentered(display.width() / 2, 86, action);
+  }
 
 
   void renderBatteryIndicator(DisplayDriver& display, uint16_t batteryMilliVolts) {
@@ -229,6 +537,8 @@ public:
         sprintf(tmp, "Pin:%d", the_mesh.getBLEPin());
         display.drawTextCentered(display.width() / 2, 43, tmp);
       }
+    } else if (_page == HomePage::SEND) {
+      renderSend(display);
     } else if (_page == HomePage::RECENT) {
       the_mesh.getRecentlyHeard(recent, UI_RECENT_LIST_SIZE);
       display.setColor(DisplayDriver::GREEN);
@@ -285,27 +595,8 @@ public:
         display.setCursor(0, 86);
         display.print("-");
       }
-    } else if (_page == HomePage::PATHS) {
-      display.setColor(DisplayDriver::GREEN);
-      display.setTextSize(1);
-      display.setCursor(0, 20);
-      display.print("Paths");
-      display.setColor(DisplayDriver::LIGHT);
-      bool any = false;
-      int y = 34;
-      for (uint8_t i = 0; i < 4; i++) {
-        if (the_mesh.getMonitorPathLine(i, tmp, sizeof(tmp))) {
-          char meta[28];
-          if (the_mesh.getMonitorPathMetaLine(i, meta, sizeof(meta))) {
-            display.drawTextEllipsized(0, y, display.width(), meta);
-            y += 10;
-          }
-          display.drawTextEllipsized(0, y, display.width(), tmp);
-          y += 13;
-          any = true;
-        }
-      }
-      if (!any) display.drawTextEllipsized(0, 36, display.width(), "No RX paths");
+    } else if (_page == HomePage::HEATSTRIP) {
+      renderHeatstrip(display);
     } else if (_page == HomePage::HEARDS) {
       display.setColor(DisplayDriver::GREEN);
       display.setTextSize(1);
@@ -320,28 +611,8 @@ public:
         }
       }
       if (!any) display.drawTextEllipsized(0, 36, display.width(), "No RX hops");
-    } else if (_page == HomePage::HISTOGRAM) {
-      uint16_t bins[MONITOR_ACTIVITY_BINS];
-      uint8_t bin_count = the_mesh.getMonitorActivity(bins, MONITOR_ACTIVITY_BINS);
-      uint16_t max_bin = 1;
-      for (uint8_t i = 0; i < bin_count; i++) {
-        if (bins[i] > max_bin) max_bin = bins[i];
-      }
-
-      display.setColor(DisplayDriver::GREEN);
-      display.setTextSize(1);
-      display.setCursor(0, 20);
-      snprintf(tmp, sizeof(tmp), "RX/min 0-%u", (unsigned int)max_bin);
-      display.print(tmp);
-      display.setColor(DisplayDriver::LIGHT);
-      int top = 34;
-      int row_h = 7;
-      int bar_w_max = display.width() - 10;
-      for (uint8_t i = 0; i < bin_count; i++) {
-        int bar_w = bins[i] == 0 ? 0 : (int)((uint32_t)bins[i] * bar_w_max / max_bin);
-        int y = top + i * row_h;
-        if (bar_w > 0) display.fillRect(0, y, bar_w, row_h - 2);
-      }
+    } else if (_page == HomePage::LOAD) {
+      renderLoad(display);
     } else if (_page == HomePage::BLUETOOTH) {
       display.setColor(DisplayDriver::GREEN);
       display.drawXbm((display.width() - 32) / 2, 18,
@@ -478,14 +749,60 @@ public:
   }
 
   bool handleInput(char c) override {
+    if (_page == HomePage::SEND && send_mode != SEND_MODE_NAV) {
+      if (c == KEY_LEFT || c == KEY_PREV) {
+        if (send_mode == SEND_MODE_TARGET && send_target_count > 0) {
+          send_target_idx = (send_target_idx + send_target_count - 1) % send_target_count;
+        } else if (send_mode == SEND_MODE_MESSAGE) {
+          uint8_t count = getSendMessageCount();
+          send_msg_idx = (send_msg_idx + count - 1) % count;
+        }
+        return true;
+      }
+      if (c == KEY_NEXT || c == KEY_RIGHT) {
+        if (send_mode == SEND_MODE_TARGET && send_target_count > 0) {
+          send_target_idx = (send_target_idx + 1) % send_target_count;
+        } else if (send_mode == SEND_MODE_MESSAGE) {
+          send_msg_idx = (send_msg_idx + 1) % getSendMessageCount();
+        }
+        return true;
+      }
+    }
     if (c == KEY_LEFT || c == KEY_PREV) {
       _page = (_page + HomePage::Count - 1) % HomePage::Count;
+      send_mode = SEND_MODE_NAV;
       return true;
     }
     if (c == KEY_NEXT || c == KEY_RIGHT) {
       _page = (_page + 1) % HomePage::Count;
+      send_mode = SEND_MODE_NAV;
       if (_page == HomePage::RECENT) {
         _task->showAlert("Recent adverts", 800);
+      }
+      return true;
+    }
+    if (c == KEY_ENTER && _page == HomePage::SEND) {
+      refreshSendTargets();
+      if (send_mode == SEND_MODE_NAV) {
+        send_mode = SEND_MODE_TARGET;
+      } else if (send_mode == SEND_MODE_TARGET) {
+        send_mode = SEND_MODE_MESSAGE;
+      } else {
+        if (send_target_count == 0) {
+          _task->showAlert("No target", 1000);
+        } else {
+          char quick_msg[112];
+          if (!buildSendMessage(send_msg_idx, quick_msg, sizeof(quick_msg))) {
+            _task->showAlert("No GPS fix", 1000);
+            send_mode = SEND_MODE_NAV;
+            return true;
+          }
+          bool sent_flood = false;
+          bool sent = the_mesh.sendQuickText(send_targets[send_target_idx], quick_msg, &sent_flood);
+          _task->notify(sent ? UIEventType::ack : UIEventType::none);
+          _task->showAlert(sent ? (sent_flood ? "Sent flood" : "Sent") : "Send failed", 1000);
+        }
+        send_mode = SEND_MODE_NAV;
       }
       return true;
     }
@@ -625,6 +942,9 @@ void UITask::begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* no
 
 #if defined(PIN_USER_BTN)
   user_btn.begin();
+#endif
+#if defined(BUTTON_PIN2)
+  user_btn2.begin();
 #endif
 #if defined(PIN_USER_BTN_ANA)
   analog_btn.begin();
@@ -770,7 +1090,12 @@ void UITask::shutdown(bool restart){
 
 bool UITask::isButtonPressed() const {
 #ifdef PIN_USER_BTN
-  return user_btn.isPressed();
+  if (user_btn.isPressed()) return true;
+#else
+  return false;
+#endif
+#ifdef BUTTON_PIN2
+  return user_btn2.isPressed();
 #else
   return false;
 #endif
@@ -812,6 +1137,18 @@ void UITask::loop() {
   } else if (ev == BUTTON_EVENT_TRIPLE_CLICK) {
     c = handleTripleClick(KEY_SELECT);
   }
+#if defined(BUTTON_PIN2)
+  ev = user_btn2.check();
+  if (ev == BUTTON_EVENT_CLICK) {
+    c = checkDisplayOn(KEY_PREV);
+  } else if (ev == BUTTON_EVENT_LONG_PRESS) {
+    c = handleLongPress(KEY_ENTER);
+  } else if (ev == BUTTON_EVENT_DOUBLE_CLICK) {
+    c = handleDoubleClick(KEY_NEXT);
+  } else if (ev == BUTTON_EVENT_TRIPLE_CLICK) {
+    c = handleTripleClick(KEY_SELECT);
+  }
+#endif
 #endif
 #if defined(PIN_USER_BTN_ANA)
   if (abs(millis() - _analogue_pin_read_millis) > 10) {

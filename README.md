@@ -67,10 +67,15 @@ advert
 
 ## Field-Web-AP
 
-Der WP startet im aktuellen Test-Build automatisch einen lokalen Access Point
-fuer Feldarbeit. Das ist ueber `OBSERVER_WEB_AP_DEFAULT_ON=1` im
-WP-Buildprofil aktiviert und sollte fuer einen spaeteren Feld-/MQTT-Build
-wieder bewusst entschieden werden.
+Der WP kann fuer Feldarbeit einen lokalen Access Point oder eine
+WLAN-Station-View starten. Im aktuellen Build bleiben AP, WLAN-Station-View und
+MQTT beim Boot bewusst aus. Das lokale Display ist damit die priorisierte
+Live-Ansicht; Web View oder MQTT werden nur explizit per CLI bzw. Taste
+aktiviert.
+
+Fuer einen spaeteren Feld-/MQTT-Build kann wieder bewusst entschieden werden,
+ob `OBSERVER_WEB_AP_DEFAULT_ON` oder `OBSERVER_WEB_VIEW_DEFAULT_ON` aktiv sein
+soll.
 
 CLI-Kommandos:
 
@@ -98,6 +103,10 @@ oder per `web.view on` gestartet. Dabei verbindet sich der Node mit dem
 konfigurierten WLAN und stellt dieselbe Webseite im lokalen Netz bereit. MQTT
 wird dabei persistent deaktiviert und bleibt aus, bis es explizit per `mqtt on`
 oder `set mqtt.enabled on` wieder aktiviert wird.
+
+Wenn die WLAN-Verbindung im Viewmodus verloren geht, versucht der Node sie in
+Abstaenden neu aufzubauen. Bleibt das WLAN laenger nicht erreichbar, startet er
+den Field-Web-AP, damit das Geraet im Feld wieder direkt erreichbar bleibt.
 
 Im Station-Viewmodus ist die Web-API read-only: Zeit- und Positionsaenderungen
 werden abgelehnt. `POST /api/savepoint` bleibt erlaubt, damit waehrend eines
@@ -233,6 +242,11 @@ Status-Screen:
 - RX/MQTT Pakete der laufenden Minute
 - Gesamtsummen seit Start
 
+E-Ink-Ghosting wird durch periodische Full-Refreshes begrenzt: der
+E213-Treiber nutzt fuer normale Aenderungen schnelle Partial-Updates, erzwingt
+aber nach mehreren geaenderten Frames bzw. nach laengerer Laufzeit einen
+vollen Panel-Refresh.
+
 Pfad-Screen:
 
 - haeufigste Pfad-Triples seit Start
@@ -274,7 +288,8 @@ Load-Screen:
 
 - prozentuale RX-Netzauslastung auf Basis der geschaetzten Airtime
 - 12-Minuten-Verlauf als Balken von links nach rechts
-- rechte Legende mit aktueller Minute, Maximum und 12-Minuten-Durchschnitt
+- rechte Legende mit letzter abgeschlossener Minute, Maximum und 12-Minuten-Durchschnitt
+- wird im Normalbetrieb minutenweise aktualisiert, damit das E-Ink-Display nicht bei jedem RX neu gezeichnet wird
 
 Savepoints-Screen:
 
@@ -326,7 +341,55 @@ Danach die Werte in `platformio.local.ini` anpassen. Diese Datei ist in
 - Langer Druck auf Heards-Screen: Repeater-Discovery / Find Nearby Nodes senden
 - Langer Druck auf MQTT-Screen: WLAN-Station-Viewmodus toggeln, MQTT bleibt aus
 - Langer Druck auf Savepoints-Screen: Live-Zaehler zuruecksetzen
-- Langer Druck auf MQTT-Screen: WLAN/MQTT toggeln
+
+## ThinkNode M1 Companion
+
+Zusaetzlich zum WP wird ein ThinkNode M1 als BLE-Companion-Radio gepflegt. Er
+basiert auf dem Companion-Radio-Build, nicht auf dem Simple-Repeater-Build.
+
+Build- und Upload-Environment:
+
+```sh
+/Users/dirkehlert/.platformio/penv/bin/pio run -e ThinkNode_M1_companion_radio_ble
+/Users/dirkehlert/.platformio/penv/bin/pio run -e ThinkNode_M1_companion_radio_ble -t upload --upload-port /dev/cu.usbmodem11301
+```
+
+Tasten:
+
+- Button 1: naechste Seite
+- Button 2: vorige Seite
+- Long Press auf dem Send-Screen: Auswahl bestaetigen bzw. senden
+
+Screens:
+
+- Radio/Status mit Frequenz, BW, TX, Noise Floor, RX, SNR und Last Path
+- OriginLane Messages
+- Send-Screen fuer vordefinierte Nachrichten an Kanaele oder gehoerte Nodes
+- Heatstrip statt alter Path-Seite
+- Heard Repeaters
+- Load-Screen statt Histogramm
+
+Send-Screen:
+
+- Ziele sind konfigurierte Kanaele und zuletzt gehoerte Kontakte
+- Kanalnachrichten werden als lokale Echo-Nachricht in die App-Queue gelegt,
+  damit sie in der verbundenen App sichtbar werden
+- Direkte Node-Nachrichten werden gesendet, aber nicht als lokales Echo
+  gefaelscht
+- Die letzte dynamische Nachricht sendet die aktuelle GPS-Position als
+  `Meine Position ist: <lat>, <lon>`, sofern ein gueltiger Fix vorliegt
+
+Quick-Message-CLI:
+
+```text
+qm.list
+qm.set <1-6> <text>
+qm.clear <1-6>
+qm.reset
+```
+
+Die normalen seriellen CLI-Kommandos sind auch im laufenden BLE-Betrieb
+verfuegbar.
 
 ## Savepoints
 
