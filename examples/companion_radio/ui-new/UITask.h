@@ -73,6 +73,7 @@ public:
   void begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* node_prefs);
 
   void gotoHomeScreen() { setCurrScreen(home); }
+  void gotoMsgPreviewScreen();
   void showAlert(const char* text, int duration_millis);
   int  getMsgCount() const { return _msgcount; }
   bool hasDisplay() const { return _display != NULL; }
@@ -93,7 +94,9 @@ public:
 
   // from AbstractUITask
   void msgRead(int msgcount) override;
-  void newMsg(uint8_t path_len, const char* from_name, const char* text, int msgcount) override;
+  void newMsg(uint8_t path_len, const char* from_name, const uint8_t* from_pubkey,
+              uint8_t reply_channel_idx, const char* reply_mention,
+              const char* text, int msgcount) override;
   void notify(UIEventType t = UIEventType::none) override;
   void loop() override;
 

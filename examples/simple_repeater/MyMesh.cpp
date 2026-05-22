@@ -5,6 +5,8 @@
 #include <esp_sleep.h>
 #include <esp_attr.h>
 #include <driver/rtc_io.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 #endif
 #if defined(ENABLE_OBSERVER_WEB_AP) && defined(ESP32)
 #include <WiFi.h>
@@ -115,12 +117,24 @@ struct ObserverHealthBreadcrumb {
   uint32_t mqtt_total;
   uint32_t free_heap;
   uint32_t min_heap;
+  uint16_t batt_mv;
+  uint32_t boot_count;
+  uint32_t reset_reason;
+  uint32_t last_irq_count;
   uint8_t screen;
   uint8_t web_state;
   uint8_t web_active;
   uint8_t web_rejects;
   uint8_t web_last;
+  uint8_t render_phase;
+  uint8_t marker;
   uint16_t web_last_age_s;
+  uint16_t max_recv_raw_ms;
+  uint16_t max_decode_ms;
+  uint16_t max_forward_ms;
+  uint16_t max_display_ms;
+  uint16_t max_cli_ms;
+  uint16_t max_flood_ms;
   uint32_t crc;
 };
 
@@ -137,12 +151,24 @@ static uint32_t observerHealthCrc(const ObserverHealthBreadcrumb& item) {
   crc ^= item.mqtt_total;
   crc ^= item.free_heap;
   crc ^= item.min_heap;
+  crc ^= item.batt_mv;
+  crc ^= item.boot_count;
+  crc ^= item.reset_reason;
+  crc ^= item.last_irq_count;
   crc ^= item.screen;
   crc ^= item.web_state;
   crc ^= item.web_active;
   crc ^= item.web_rejects;
   crc ^= item.web_last;
+  crc ^= item.render_phase;
+  crc ^= item.marker;
   crc ^= item.web_last_age_s;
+  crc ^= item.max_recv_raw_ms;
+  crc ^= item.max_decode_ms;
+  crc ^= item.max_forward_ms;
+  crc ^= item.max_display_ms;
+  crc ^= item.max_cli_ms;
+  crc ^= item.max_flood_ms;
   return crc;
 }
 
@@ -167,6 +193,21 @@ static const char* observerResetReasonString(esp_reset_reason_t reason) {
 }
 #endif
 #define CLOCK_SYNC_MAX_TIME      2051222400UL  // 2035-01-01T00:00:00Z
+
+enum ObserverTimingMarker : uint8_t {
+  OBS_MARKER_NONE = 0,
+  OBS_MARKER_RADIO_RECV = 1,
+  OBS_MARKER_PACKET_DECODE = 2,
+  OBS_MARKER_PACKET_FORWARD = 3,
+  OBS_MARKER_RADIO_SEND = 4,
+  OBS_MARKER_DISPLAY = 5,
+  OBS_MARKER_CLI = 6,
+  OBS_MARKER_FLOOD_ADVERT = 7,
+};
+
+static uint16_t observerClampDuration(uint32_t duration_ms) {
+  return duration_ms > 65535U ? 65535U : (uint16_t)duration_ms;
+}
 
 #if defined(ENABLE_OBSERVER_WEB_AP) && defined(ESP32)
 static const char OBSERVER_WEB_HTML[] PROGMEM = R"HTML(
@@ -715,10 +756,18 @@ void MyMesh::sendFloodReply(mesh::Packet* packet, unsigned long delay_millis, ui
 }
 
 bool MyMesh::allowPacketForward(const mesh::Packet *packet) {
-  if (_prefs.disable_fwd) return false;
-  if (packet->isRouteFlood() && packet->getPathHashCount() >= _prefs.flood_max) return false;
+  setObserverHealthPhase(36);
+  if (_prefs.disable_fwd) {
+    setObserverHealthPhase(0);
+    return false;
+  }
+  if (packet->isRouteFlood() && packet->getPathHashCount() >= _prefs.flood_max) {
+    setObserverHealthPhase(0);
+    return false;
+  }
   if (packet->isRouteFlood() && recv_pkt_region == NULL) {
     MESH_DEBUG_PRINTLN("allowPacketForward: unknown transport code, or wildcard not allowed for FLOOD packet");
+    setObserverHealthPhase(0);
     return false;
   }
   if (packet->isRouteFlood() && _prefs.loop_detect != LOOP_DETECT_OFF) {
@@ -732,9 +781,11 @@ bool MyMesh::allowPacketForward(const mesh::Packet *packet) {
     }
     if (isLooped(packet, maximums)) {
       MESH_DEBUG_PRINTLN("allowPacketForward: FLOOD packet loop detected!");
+      setObserverHealthPhase(0);
       return false;
     }
   }
+  setObserverHealthPhase(0);
   return true;
 }
 
@@ -757,19 +808,25 @@ void MyMesh::logRxRaw(float snr, float rssi, const uint8_t raw[], int len) {
 }
 
 void MyMesh::logRx(mesh::Packet *pkt, int len, float score) {
+  setObserverHealthPhase(5);
   OBSERVER_LOCK();
   observer_rx_packets++;
   OBSERVER_UNLOCK();
+  setObserverHealthPhase(6);
   int snr_x4 = (int)(_radio->getLastSNR() * 4);
   if (snr_x4 > 127) snr_x4 = 127;
   if (snr_x4 < -128) snr_x4 = -128;
+  setObserverHealthPhase(7);
   rememberObserverPath(pkt);
+  setObserverHealthPhase(8);
   rememberObserverLastHop(pkt, (int8_t)snr_x4);
+  setObserverHealthPhase(9);
 #ifdef WITH_BRIDGE
   if (_prefs.bridge_pkt_src == 1) {
     bridge.sendPacket(pkt);
   }
 #endif
+  setObserverHealthPhase(10);
 #ifdef WITH_MQTT_OBSERVER
   if (mqtt_observer.sendPacket(pkt, true, (int)_radio->getLastRSSI(), snr_x4)) {
     OBSERVER_LOCK();
@@ -777,6 +834,7 @@ void MyMesh::logRx(mesh::Packet *pkt, int len, float score) {
     OBSERVER_UNLOCK();
   }
 #endif
+  setObserverHealthPhase(11);
 
   if (_logging) {
     File f = openAppend(PACKET_LOG_FILE);
@@ -795,6 +853,7 @@ void MyMesh::logRx(mesh::Packet *pkt, int len, float score) {
       f.close();
     }
   }
+  setObserverHealthPhase(0);
 }
 
 void MyMesh::observeClockSyncSample(const mesh::Identity& id, uint32_t timestamp) {
@@ -902,6 +961,7 @@ uint32_t MyMesh::getDirectRetransmitDelay(const mesh::Packet *packet) {
 }
 
 bool MyMesh::filterRecvFloodPacket(mesh::Packet* pkt) {
+  setObserverHealthPhase(37);
   // just try to determine region for packet (apply later in allowPacketForward())
   if (pkt->getRouteType() == ROUTE_TYPE_TRANSPORT_FLOOD) {
     recv_pkt_region = region_map.findMatch(pkt, REGION_DENY_FLOOD);
@@ -920,6 +980,7 @@ bool MyMesh::filterRecvFloodPacket(mesh::Packet* pkt) {
 
 void MyMesh::onAnonDataRecv(mesh::Packet *packet, const uint8_t *secret, const mesh::Identity &sender,
                             uint8_t *data, size_t len) {
+  setObserverHealthPhase(38);
   if (packet->getPayloadType() == PAYLOAD_TYPE_ANON_REQ) { // received an initial request by a possible admin
                                                            // client (unknown at this stage)
     uint32_t timestamp;
@@ -930,36 +991,48 @@ void MyMesh::onAnonDataRecv(mesh::Packet *packet, const uint8_t *secret, const m
 
     reply_path_len = -1;
     if (data[4] == 0 || data[4] >= ' ') {   // is password, ie. a login request
+      setObserverHealthPhase(39);
       reply_len = handleLoginReq(sender, secret, timestamp, &data[4], packet->isRouteFlood());
     } else if (data[4] == ANON_REQ_TYPE_REGIONS && packet->isRouteDirect()) {
+      setObserverHealthPhase(40);
       reply_len = handleAnonRegionsReq(sender, timestamp, &data[5]);
     } else if (data[4] == ANON_REQ_TYPE_OWNER && packet->isRouteDirect()) {
+      setObserverHealthPhase(41);
       reply_len = handleAnonOwnerReq(sender, timestamp, &data[5]);
     } else if (data[4] == ANON_REQ_TYPE_BASIC && packet->isRouteDirect()) {
+      setObserverHealthPhase(42);
       reply_len = handleAnonClockReq(sender, timestamp, &data[5]);
     } else {
       reply_len = 0;  // unknown/invalid request type
     }
 
-    if (reply_len == 0) return;   // invalid request
+    if (reply_len == 0) {
+      setObserverHealthPhase(0);
+      return;   // invalid request
+    }
 
     if (packet->isRouteFlood()) {
+      setObserverHealthPhase(43);
       // let this sender know path TO here, so they can use sendDirect(), and ALSO encode the response
       mesh::Packet* path = createPathReturn(sender, secret, packet->path, packet->path_len,
                                             PAYLOAD_TYPE_RESPONSE, reply_data, reply_len);
       if (path) sendFloodReply(path, SERVER_RESPONSE_DELAY, packet->getPathHashSize());
     } else if (reply_path_len < 0) {
+      setObserverHealthPhase(44);
       mesh::Packet* reply = createDatagram(PAYLOAD_TYPE_RESPONSE, sender, secret, reply_data, reply_len);
       if (reply) sendFloodReply(reply, SERVER_RESPONSE_DELAY, packet->getPathHashSize());
     } else {
+      setObserverHealthPhase(45);
       mesh::Packet* reply = createDatagram(PAYLOAD_TYPE_RESPONSE, sender, secret, reply_data, reply_len);
       uint8_t path_len = ((reply_path_hash_size - 1) << 6) | (reply_path_len & 63);
       if (reply) sendDirect(reply, reply_path,  path_len, SERVER_RESPONSE_DELAY);
     }
   }
+  setObserverHealthPhase(0);
 }
 
 int MyMesh::searchPeersByHash(const uint8_t *hash) {
+  setObserverHealthPhase(46);
   int n = 0;
   for (int i = 0; i < acl.getNumClients(); i++) {
     if (acl.getClientByIdx(i)->id.isHashMatch(hash)) {
@@ -970,6 +1043,7 @@ int MyMesh::searchPeersByHash(const uint8_t *hash) {
 }
 
 void MyMesh::getPeerSharedSecret(uint8_t *dest_secret, int peer_idx) {
+  setObserverHealthPhase(47);
   int i = matching_peer_indexes[peer_idx];
   if (i >= 0 && i < acl.getNumClients()) {
     // lookup pre-calculated shared_secret
@@ -988,41 +1062,53 @@ static bool isShare(const mesh::Packet *packet) {
 
 void MyMesh::onAdvertRecv(mesh::Packet *packet, const mesh::Identity &id, uint32_t timestamp,
                           const uint8_t *app_data, size_t app_data_len) {
+  setObserverHealthPhase(18);
   mesh::Mesh::onAdvertRecv(packet, id, timestamp, app_data, app_data_len); // chain to super impl
 #ifdef ENABLE_OBSERVER_CLOCK_SYNC
+  setObserverHealthPhase(19);
   observeClockSyncSample(id, timestamp);
 #endif
 
   // if this a zero hop advert (and not via 'Share'), add it to neighbours
+  setObserverHealthPhase(20);
   if (packet->path_len == 0 && !isShare(packet)) {
     AdvertDataParser parser(app_data, app_data_len);
     if (parser.isValid() && parser.getType() == ADV_TYPE_REPEATER) { // just keep neigbouring Repeaters
       putNeighbour(id, timestamp, packet->getSNR());
     }
   }
+  setObserverHealthPhase(0);
 }
 
 void MyMesh::onPeerDataRecv(mesh::Packet *packet, uint8_t type, int sender_idx, const uint8_t *secret,
                             uint8_t *data, size_t len) {
+  setObserverHealthPhase(21);
   int i = matching_peer_indexes[sender_idx];
   if (i < 0 || i >= acl.getNumClients()) { // get from our known_clients table (sender SHOULD already be known in this context)
     MESH_DEBUG_PRINTLN("onPeerDataRecv: invalid peer idx: %d", i);
+    setObserverHealthPhase(0);
     return;
   }
   ClientInfo* client = acl.getClientByIdx(i);
 
   if (type == PAYLOAD_TYPE_REQ) { // request (from a Known admin client!)
+    setObserverHealthPhase(22);
     uint32_t timestamp;
     memcpy(&timestamp, data, 4);
 
     if (timestamp > client->last_timestamp) { // prevent replay attacks
+      setObserverHealthPhase(23);
       int reply_len = handleRequest(client, timestamp, &data[4], len - 4);
-      if (reply_len == 0) return; // invalid command
+      if (reply_len == 0) {
+        setObserverHealthPhase(0);
+        return; // invalid command
+      }
 
       client->last_timestamp = timestamp;
       client->last_activity = getRTCClock()->getCurrentTime();
 
       if (packet->isRouteFlood()) {
+        setObserverHealthPhase(24);
         // let this sender know path TO here, so they can use sendDirect(), and ALSO encode the response
         mesh::Packet *path = createPathReturn(client->id, secret, packet->path, packet->path_len,
                                               PAYLOAD_TYPE_RESPONSE, reply_data, reply_len);
@@ -1042,6 +1128,7 @@ void MyMesh::onPeerDataRecv(mesh::Packet *packet, uint8_t type, int sender_idx, 
       MESH_DEBUG_PRINTLN("onPeerDataRecv: possible replay attack detected");
     }
   } else if (type == PAYLOAD_TYPE_TXT_MSG && len > 5 && client->isAdmin()) { // a CLI command
+    setObserverHealthPhase(25);
     uint32_t sender_timestamp;
     memcpy(&sender_timestamp, data, 4); // timestamp (by sender's RTC clock - which could be wrong)
     uint8_t flags = (data[4] >> 2);        // message attempt number, and other flags
@@ -1057,6 +1144,7 @@ void MyMesh::onPeerDataRecv(mesh::Packet *packet, uint8_t type, int sender_idx, 
       data[len] = 0; // need to make a C string again, with null terminator
 
       if (flags == TXT_TYPE_PLAIN) { // for legacy CLI, send Acks
+        setObserverHealthPhase(26);
         uint32_t ack_hash; // calc truncated hash of the message timestamp + text + sender pub_key, to prove
                            // to sender that we got it
         mesh::Utils::sha256((uint8_t *)&ack_hash, 4, data, 5 + strlen((char *)&data[5]), client->id.pub_key,
@@ -1078,10 +1166,12 @@ void MyMesh::onPeerDataRecv(mesh::Packet *packet, uint8_t type, int sender_idx, 
       if (is_retry) {
         *reply = 0;
       } else {
+        setObserverHealthPhase(27);
         handleCommand(sender_timestamp, command, reply);
       }
       int text_len = strlen(reply);
       if (text_len > 0) {
+        setObserverHealthPhase(28);
         uint32_t timestamp = getRTCClock()->getCurrentTimeUnique();
         if (timestamp == sender_timestamp) {
           // WORKAROUND: the two timestamps need to be different, in the CLI view
@@ -1103,10 +1193,12 @@ void MyMesh::onPeerDataRecv(mesh::Packet *packet, uint8_t type, int sender_idx, 
       MESH_DEBUG_PRINTLN("onPeerDataRecv: possible replay attack detected");
     }
   }
+  setObserverHealthPhase(0);
 }
 
 bool MyMesh::onPeerPathRecv(mesh::Packet *packet, int sender_idx, const uint8_t *secret, uint8_t *path,
                             uint8_t path_len, uint8_t extra_type, uint8_t *extra, uint8_t extra_len) {
+  setObserverHealthPhase(29);
   // TODO: prevent replay attacks
   int i = matching_peer_indexes[sender_idx];
 
@@ -1122,6 +1214,7 @@ bool MyMesh::onPeerPathRecv(mesh::Packet *packet, int sender_idx, const uint8_t 
   }
 
   // NOTE: no reciprocal path send!!
+  setObserverHealthPhase(0);
   return false;
 }
 
@@ -1129,10 +1222,12 @@ bool MyMesh::onPeerPathRecv(mesh::Packet *packet, int sender_idx, const uint8_t 
 #define CTL_TYPE_NODE_DISCOVER_RESP  0x90
 
 void MyMesh::onControlDataRecv(mesh::Packet* packet) {
+  setObserverHealthPhase(30);
   uint8_t type = packet->payload[0] & 0xF0;    // just test upper 4 bits
   if (type == CTL_TYPE_NODE_DISCOVER_REQ && packet->payload_len >= 6
       && !_prefs.disable_fwd && discover_limiter.allow(rtc_clock.getCurrentTime())
   ) {
+    setObserverHealthPhase(31);
     int i = 1;
     uint8_t  filter = packet->payload[i++];
     uint32_t tag;
@@ -1145,6 +1240,7 @@ void MyMesh::onControlDataRecv(mesh::Packet* packet) {
     }
 
     if ((filter & (1 << ADV_TYPE_REPEATER)) != 0 && _prefs.discovery_mod_timestamp >= since) {
+      setObserverHealthPhase(32);
       bool prefix_only = packet->payload[0] & 1;
       uint8_t data[6 + PUB_KEY_SIZE];
       data[0] = CTL_TYPE_NODE_DISCOVER_RESP | ADV_TYPE_REPEATER;   // low 4-bits for node type
@@ -1153,35 +1249,44 @@ void MyMesh::onControlDataRecv(mesh::Packet* packet) {
       memcpy(&data[6], self_id.pub_key, PUB_KEY_SIZE);
       auto resp = createControlData(data, prefix_only ? 6 + 8 : 6 + PUB_KEY_SIZE);
       if (resp) {
+        setObserverHealthPhase(33);
         sendZeroHop(resp, getRetransmitDelay(resp)*4);  // apply random delay (widened x4), as multiple nodes can respond to this
       }
     }
   } else if (type == CTL_TYPE_NODE_DISCOVER_RESP && packet->payload_len >= 6) {
+    setObserverHealthPhase(34);
     uint8_t node_type = packet->payload[0] & 0x0F;
     if (node_type != ADV_TYPE_REPEATER) {
+      setObserverHealthPhase(0);
       return;
     }
     if (packet->payload_len < 6 + PUB_KEY_SIZE) {
       MESH_DEBUG_PRINTLN("onControlDataRecv: DISCOVER_RESP pubkey too short: %d", (uint32_t)packet->payload_len);
+      setObserverHealthPhase(0);
       return;
     }
 
     if (pending_discover_tag == 0 || millisHasNowPassed(pending_discover_until)) {
       pending_discover_tag = 0;
+      setObserverHealthPhase(0);
       return;
     }
     uint32_t tag;
     memcpy(&tag, &packet->payload[2], 4);
     if (tag != pending_discover_tag) {
+      setObserverHealthPhase(0);
       return;
     }
 
     mesh::Identity id(&packet->payload[6]);
     if (id.matches(self_id)) {
+      setObserverHealthPhase(0);
       return;
     }
+    setObserverHealthPhase(35);
     putNeighbour(id, rtc_clock.getCurrentTime(), packet->getSNR());
   }
+  setObserverHealthPhase(0);
 }
 
 void MyMesh::sendNodeDiscoverReq() {
@@ -1229,8 +1334,12 @@ MyMesh::MyMesh(mesh::MainBoard &board, mesh::Radio &radio, mesh::MillisecondCloc
   observer_path_next = 0;
   observer_next_health_at = 10000;
   observer_health_screen = 0;
+  observer_health_phase = 0;
+  observer_health_marker = OBS_MARKER_NONE;
   observer_prev_health_valid = false;
   observer_prev_health_screen = 0;
+  observer_prev_health_phase = 0;
+  observer_prev_health_marker = OBS_MARKER_NONE;
   observer_prev_health_web_state = 0;
   observer_prev_health_web_active = 0;
   observer_prev_health_web_rejects = 0;
@@ -1240,6 +1349,22 @@ MyMesh::MyMesh(mesh::MainBoard &board, mesh::Radio &radio, mesh::MillisecondCloc
   observer_prev_health_rx = 0;
   observer_prev_health_free_heap = 0;
   observer_prev_health_min_heap = 0;
+  observer_prev_health_batt_mv = 0;
+  observer_prev_health_boot_count = 0;
+  observer_prev_health_reset_reason = 0;
+  observer_prev_health_last_irq = 0;
+  observer_prev_health_max_recv_ms = 0;
+  observer_prev_health_max_decode_ms = 0;
+  observer_prev_health_max_forward_ms = 0;
+  observer_prev_health_max_display_ms = 0;
+  observer_prev_health_max_cli_ms = 0;
+  observer_prev_health_max_flood_ms = 0;
+  observer_max_decode_ms = 0;
+  observer_max_forward_ms = 0;
+  observer_max_display_ms = 0;
+  observer_max_cli_ms = 0;
+  observer_max_flood_ms = 0;
+  observer_boot_health_started = false;
 #if defined(ENABLE_OBSERVER_WEB_AP) && defined(ESP32)
   observer_web_server = nullptr;
   observer_web_ap_running = false;
@@ -1262,6 +1387,7 @@ MyMesh::MyMesh(mesh::MainBoard &board, mesh::Radio &radio, mesh::MillisecondCloc
   if (observerHealthValid(observer_health_breadcrumb)) {
     observer_prev_health_valid = true;
     observer_prev_health_screen = observer_health_breadcrumb.screen;
+    observer_prev_health_phase = observer_health_breadcrumb.render_phase;
     observer_prev_health_web_state = observer_health_breadcrumb.web_state;
     observer_prev_health_web_active = observer_health_breadcrumb.web_active;
     observer_prev_health_web_rejects = observer_health_breadcrumb.web_rejects;
@@ -1271,6 +1397,17 @@ MyMesh::MyMesh(mesh::MainBoard &board, mesh::Radio &radio, mesh::MillisecondCloc
     observer_prev_health_rx = observer_health_breadcrumb.rx_total;
     observer_prev_health_free_heap = observer_health_breadcrumb.free_heap;
     observer_prev_health_min_heap = observer_health_breadcrumb.min_heap;
+    observer_prev_health_batt_mv = observer_health_breadcrumb.batt_mv;
+    observer_prev_health_boot_count = observer_health_breadcrumb.boot_count;
+    observer_prev_health_reset_reason = observer_health_breadcrumb.reset_reason;
+    observer_prev_health_last_irq = observer_health_breadcrumb.last_irq_count;
+    observer_prev_health_marker = observer_health_breadcrumb.marker;
+    observer_prev_health_max_recv_ms = observer_health_breadcrumb.max_recv_raw_ms;
+    observer_prev_health_max_decode_ms = observer_health_breadcrumb.max_decode_ms;
+    observer_prev_health_max_forward_ms = observer_health_breadcrumb.max_forward_ms;
+    observer_prev_health_max_display_ms = observer_health_breadcrumb.max_display_ms;
+    observer_prev_health_max_cli_ms = observer_health_breadcrumb.max_cli_ms;
+    observer_prev_health_max_flood_ms = observer_health_breadcrumb.max_flood_ms;
   }
 #endif
 #ifdef ENABLE_OBSERVER_CLOCK_SYNC
@@ -1356,6 +1493,8 @@ MyMesh::MyMesh(mesh::MainBoard &board, mesh::Radio &radio, mesh::MillisecondCloc
 }
 
 void MyMesh::begin(FILESYSTEM *fs) {
+  beginObserverHealthBoot();
+
   mesh::Mesh::begin();
   _fs = fs;
   // load persisted prefs
@@ -1515,6 +1654,7 @@ bool MyMesh::toggleObserverMqttEnabled() {
 }
 
 void MyMesh::rememberObserverPath(const mesh::Packet* packet) {
+  setObserverHealthPhase(12);
   uint8_t hash_size = packet->getPathHashSize();
   uint8_t hash_count = packet->getPathHashCount();
   uint8_t display_hops = min((uint8_t)OBSERVER_PATH_DISPLAY_HOPS, hash_count);
@@ -1551,6 +1691,7 @@ void MyMesh::rememberObserverPath(const mesh::Packet* packet) {
   key[key_pos] = 0;
 
   unsigned long now = millis();
+  setObserverHealthPhase(13);
   OBSERVER_LOCK();
   for (uint8_t i = 0; i < OBSERVER_PATH_HISTORY_SIZE; i++) {
     ObserverPathInfo& existing = observer_paths[i];
@@ -1559,6 +1700,7 @@ void MyMesh::rememberObserverPath(const mesh::Packet* packet) {
       existing.seen_at = now;
       if (existing.count < 0xFFFF) existing.count++;
       OBSERVER_UNLOCK();
+      setObserverHealthPhase(14);
       return;
     }
   }
@@ -1585,6 +1727,7 @@ void MyMesh::rememberObserverPath(const mesh::Packet* packet) {
   StrHelper::strncpy(item.text, text, sizeof(item.text));
   StrHelper::strncpy(item.key, key, sizeof(item.key));
   OBSERVER_UNLOCK();
+  setObserverHealthPhase(14);
 }
 
 static void formatSnrX4(char* dest, size_t dest_size, int8_t snr_x4) {
@@ -1721,6 +1864,7 @@ bool MyMesh::getObserverLatestPathLine(char* dest, size_t dest_size) const {
 }
 
 void MyMesh::rememberObserverLastHop(const mesh::Packet* packet, int8_t snr_x4) {
+  setObserverHealthPhase(15);
   uint8_t hash_size = packet->getPathHashSize();
   uint8_t hash_count = packet->getPathHashCount();
   char text[OBSERVER_LAST_HOP_TEXT_SIZE];
@@ -1742,6 +1886,7 @@ void MyMesh::rememberObserverLastHop(const mesh::Packet* packet, int8_t snr_x4) 
   }
 
   unsigned long now = millis();
+  setObserverHealthPhase(16);
   OBSERVER_LOCK();
   for (uint8_t i = 0; i < OBSERVER_LAST_HOP_HISTORY_SIZE; i++) {
     ObserverLastHopInfo& item = observer_last_hops[i];
@@ -1751,6 +1896,7 @@ void MyMesh::rememberObserverLastHop(const mesh::Packet* packet, int8_t snr_x4) 
       item.last_snr = snr_x4;
       if (snr_x4 > item.max_snr) item.max_snr = snr_x4;
       OBSERVER_UNLOCK();
+      setObserverHealthPhase(17);
       return;
     }
   }
@@ -1776,6 +1922,7 @@ void MyMesh::rememberObserverLastHop(const mesh::Packet* packet, int8_t snr_x4) 
   StrHelper::strncpy(item.text, text, sizeof(item.text));
   StrHelper::strncpy(item.key, key, sizeof(item.key));
   OBSERVER_UNLOCK();
+  setObserverHealthPhase(17);
 }
 
 bool MyMesh::getObserverLastHopLine(uint8_t index, char* dest, size_t dest_size) const {
@@ -1839,10 +1986,18 @@ void MyMesh::getObserverDiagLine(char* dest, size_t dest_size) const {
   if (!dest || dest_size == 0) return;
 
 #if defined(ESP32)
-  snprintf(dest, dest_size, "Boot:%s H:%luk/%luk",
+  uint32_t boot_count = observerHealthValid(observer_health_breadcrumb) ? observer_health_breadcrumb.boot_count : 0;
+  uint16_t batt_mv = getObserverBattMilliVolts();
+  uint32_t last_irq = _radio ? _radio->getLastIrqMicros() : 0;
+  uint32_t irq_age_ms = last_irq ? (uint32_t)((micros() - last_irq) / 1000UL) : 0;
+  snprintf(dest, dest_size, "Boot:%s B:%lu Batt:%umV H:%luk/%luk IRQ:%lu/%lums",
            observerResetReasonString(esp_reset_reason()),
+           (unsigned long)boot_count,
+           (unsigned int)batt_mv,
            (unsigned long)(ESP.getFreeHeap() / 1024),
-           (unsigned long)(ESP.getMinFreeHeap() / 1024));
+           (unsigned long)(ESP.getMinFreeHeap() / 1024),
+           (unsigned long)(_radio ? _radio->getIrqCount() : 0),
+           (unsigned long)irq_age_ms);
 #else
   snprintf(dest, dest_size, "Boot:n/a Up:%lus", (unsigned long)(millis() / 1000));
 #endif
@@ -1892,18 +2047,161 @@ void MyMesh::getObserverHealthLine(char* dest, size_t dest_size) const {
   }
 #endif
 
-  snprintf(dest, dest_size, "Prev:S%u %s W:%s%s H:%luk/%luk RX:%lu",
+  char render_extra[14] = "";
+  if (observer_prev_health_phase) {
+    snprintf(render_extra, sizeof(render_extra), ".%u", (unsigned int)observer_prev_health_phase);
+  }
+
+  char marker_extra[8] = "";
+  if (observer_prev_health_marker) {
+    snprintf(marker_extra, sizeof(marker_extra), " M:%u", (unsigned int)observer_prev_health_marker);
+  }
+
+  snprintf(dest, dest_size, "Prev:B%lu S%u%s%s %s W:%s%s V:%umV H:%luk/%luk RX:%lu T:%u/%u/%u/%u/%u/%u",
+           (unsigned long)observer_prev_health_boot_count,
            (unsigned int)observer_prev_health_screen,
+           render_extra,
+           marker_extra,
            up_col,
            web_state,
            web_extra,
+           (unsigned int)observer_prev_health_batt_mv,
            (unsigned long)(observer_prev_health_free_heap / 1024),
            (unsigned long)(observer_prev_health_min_heap / 1024),
-           (unsigned long)observer_prev_health_rx);
+           (unsigned long)observer_prev_health_rx,
+           (unsigned int)observer_prev_health_max_recv_ms,
+           (unsigned int)observer_prev_health_max_decode_ms,
+           (unsigned int)observer_prev_health_max_forward_ms,
+           (unsigned int)observer_prev_health_max_display_ms,
+           (unsigned int)observer_prev_health_max_cli_ms,
+           (unsigned int)observer_prev_health_max_flood_ms);
+}
+
+void MyMesh::beginObserverHealthBoot() {
+#if defined(ESP32)
+  if (observer_boot_health_started) return;
+  observer_boot_health_started = true;
+
+  ObserverHealthBreadcrumb boot_item;
+  if (observerHealthValid(observer_health_breadcrumb)) {
+    boot_item = observer_health_breadcrumb;
+    boot_item.boot_count++;
+    boot_item.seq++;
+  } else {
+    memset(&boot_item, 0, sizeof(boot_item));
+    boot_item.magic = OBSERVER_HEALTH_MAGIC;
+    boot_item.seq = 1;
+    boot_item.boot_count = 1;
+    boot_item.web_last_age_s = 65535;
+  }
+  boot_item.reset_reason = (uint32_t)esp_reset_reason();
+  boot_item.uptime_s = millis() / 1000;
+  boot_item.rx_total = observer_rx_packets;
+  boot_item.mqtt_total = observer_mqtt_published;
+  boot_item.free_heap = ESP.getFreeHeap();
+  boot_item.min_heap = ESP.getMinFreeHeap();
+  boot_item.batt_mv = 0;
+  boot_item.screen = observer_health_screen;
+  boot_item.render_phase = observer_health_phase;
+  boot_item.marker = OBS_MARKER_NONE;
+  boot_item.last_irq_count = _radio ? _radio->getIrqCount() : 0;
+  boot_item.crc = observerHealthCrc(boot_item);
+  observer_health_breadcrumb = boot_item;
+#endif
 }
 
 void MyMesh::setObserverHealthScreen(uint8_t screen) {
   observer_health_screen = screen;
+}
+
+void MyMesh::setObserverHealthPhase(uint8_t phase) {
+  observer_health_phase = phase;
+#if defined(ESP32)
+  ObserverHealthBreadcrumb item;
+  if (observerHealthValid(observer_health_breadcrumb)) {
+    item = observer_health_breadcrumb;
+  } else {
+    memset(&item, 0, sizeof(item));
+    item.magic = OBSERVER_HEALTH_MAGIC;
+    item.seq = 1;
+    item.web_last_age_s = 65535;
+  }
+  item.uptime_s = millis() / 1000;
+  item.rx_total = observer_rx_packets;
+  item.mqtt_total = observer_mqtt_published;
+  item.free_heap = ESP.getFreeHeap();
+  item.min_heap = ESP.getMinFreeHeap();
+  item.batt_mv = getObserverBattMilliVolts();
+  item.last_irq_count = _radio ? _radio->getIrqCount() : 0;
+  item.screen = observer_health_screen;
+  item.render_phase = observer_health_phase;
+  item.marker = observer_health_marker;
+  item.max_recv_raw_ms = observerClampDuration(_radio ? _radio->getMaxRecvRawMillis() : 0);
+  item.max_decode_ms = observerClampDuration(observer_max_decode_ms);
+  item.max_forward_ms = observerClampDuration(observer_max_forward_ms);
+  item.max_display_ms = observerClampDuration(observer_max_display_ms);
+  item.max_cli_ms = observerClampDuration(observer_max_cli_ms);
+  item.max_flood_ms = observerClampDuration(observer_max_flood_ms);
+  item.crc = observerHealthCrc(item);
+  observer_health_breadcrumb = item;
+#endif
+}
+
+void MyMesh::setObserverHealthMarker(uint8_t marker) {
+  observer_health_marker = marker;
+  setObserverHealthPhase(observer_health_phase);
+}
+
+void MyMesh::noteObserverTiming(uint8_t marker, uint32_t duration_ms) {
+  setObserverHealthMarker(marker);
+  switch (marker) {
+    case OBS_MARKER_DISPLAY:
+      if (duration_ms > observer_max_display_ms) observer_max_display_ms = duration_ms;
+      break;
+    case OBS_MARKER_CLI:
+      if (duration_ms > observer_max_cli_ms) observer_max_cli_ms = duration_ms;
+      break;
+    case OBS_MARKER_FLOOD_ADVERT:
+      if (duration_ms > observer_max_flood_ms) observer_max_flood_ms = duration_ms;
+      break;
+    default:
+      break;
+  }
+#if defined(ESP32)
+  if (duration_ms > 10) {
+    vTaskDelay(1);
+  }
+#else
+  if (duration_ms > 10) {
+    yield();
+  }
+#endif
+  setObserverHealthMarker(OBS_MARKER_NONE);
+}
+
+void MyMesh::noteDispatchTiming(uint8_t marker, uint32_t duration_ms) {
+  if (marker == OBS_MARKER_RADIO_RECV) {
+    return;
+  }
+  setObserverHealthMarker(marker);
+  if (duration_ms == UINT32_MAX) {
+    return;
+  }
+  if (marker == OBS_MARKER_PACKET_DECODE && duration_ms > observer_max_decode_ms) {
+    observer_max_decode_ms = duration_ms;
+  } else if (marker == OBS_MARKER_PACKET_FORWARD && duration_ms > observer_max_forward_ms) {
+    observer_max_forward_ms = duration_ms;
+  }
+#if defined(ESP32)
+  if (duration_ms > 10) {
+    vTaskDelay(1);
+  }
+#else
+  if (duration_ms > 10) {
+    yield();
+  }
+#endif
+  setObserverHealthMarker(OBS_MARKER_NONE);
 }
 
 void MyMesh::updateObserverHealth() {
@@ -1920,7 +2218,19 @@ void MyMesh::updateObserverHealth() {
   item.mqtt_total = observer_mqtt_published;
   item.free_heap = ESP.getFreeHeap();
   item.min_heap = ESP.getMinFreeHeap();
+  item.batt_mv = getObserverBattMilliVolts();
+  item.boot_count = observerHealthValid(observer_health_breadcrumb) ? observer_health_breadcrumb.boot_count : 1;
+  item.reset_reason = (uint32_t)esp_reset_reason();
+  item.last_irq_count = _radio ? _radio->getIrqCount() : 0;
   item.screen = observer_health_screen;
+  item.render_phase = observer_health_phase;
+  item.marker = observer_health_marker;
+  item.max_recv_raw_ms = observerClampDuration(_radio ? _radio->getMaxRecvRawMillis() : 0);
+  item.max_decode_ms = observerClampDuration(observer_max_decode_ms);
+  item.max_forward_ms = observerClampDuration(observer_max_forward_ms);
+  item.max_display_ms = observerClampDuration(observer_max_display_ms);
+  item.max_cli_ms = observerClampDuration(observer_max_cli_ms);
+  item.max_flood_ms = observerClampDuration(observer_max_flood_ms);
   item.web_state = 0;
 #if defined(ENABLE_OBSERVER_WEB_AP) && defined(ESP32)
   if (observer_web_ap_running) item.web_state |= 0x01;
@@ -3008,23 +3318,23 @@ void MyMesh::handleCommand(uint32_t sender_timestamp, char *command, char *reply
     reply[0] = 0;
   }
 #if defined(ENABLE_OBSERVER_WEB_AP) && defined(ESP32)
-  else if (strcmp(command, "web.ap on") == 0 || strcmp(command, "web.ap") == 0) {
+  else if (strcmp(command, "web.ap on") == 0 || strcmp(command, "web.ap") == 0 || strcmp(command, "ap.on") == 0) {
     startObserverWebAp(reply, 160);
-  } else if (strcmp(command, "web.ap off") == 0) {
+  } else if (strcmp(command, "web.ap off") == 0 || strcmp(command, "ap.off") == 0) {
     stopObserverWebAp();
     strcpy(reply, "AP stopped");
-  } else if (strcmp(command, "web.ap status") == 0) {
+  } else if (strcmp(command, "web.ap status") == 0 || strcmp(command, "ap.status") == 0) {
     if (observer_web_ap_running) {
       snprintf(reply, 160, "AP http://%s ssid:%s", WiFi.softAPIP().toString().c_str(), OBSERVER_WEB_AP_SSID);
     } else {
       strcpy(reply, "AP stopped");
     }
-  } else if (strcmp(command, "web.view on") == 0 || strcmp(command, "web.view") == 0) {
+  } else if (strcmp(command, "web.view on") == 0 || strcmp(command, "web.view") == 0 || strcmp(command, "view.on") == 0) {
     startObserverWebStaView(reply, 160);
-  } else if (strcmp(command, "web.view off") == 0) {
+  } else if (strcmp(command, "web.view off") == 0 || strcmp(command, "view.off") == 0) {
     stopObserverWebStaView();
     strcpy(reply, "View stopped");
-  } else if (strcmp(command, "web.view status") == 0) {
+  } else if (strcmp(command, "web.view status") == 0 || strcmp(command, "view.status") == 0) {
     if (observer_web_sta_running) {
       if (WiFi.status() == WL_CONNECTED) {
         snprintf(reply, 160, "View http://%s mqtt:off", WiFi.localIP().toString().c_str());
@@ -3037,19 +3347,36 @@ void MyMesh::handleCommand(uint32_t sender_timestamp, char *command, char *reply
   }
 #endif
 #ifdef WITH_MQTT_OBSERVER
-  else if (strcmp(command, "mqtt on") == 0) {
+  else if (strcmp(command, "mqtt on") == 0 || strcmp(command, "mqtt.on") == 0) {
     setObserverMqttEnabled(true);
     strcpy(reply, "MQTT on");
-  } else if (strcmp(command, "mqtt off") == 0) {
+  } else if (strcmp(command, "mqtt off") == 0 || strcmp(command, "mqtt.off") == 0) {
     setObserverMqttEnabled(false);
     strcpy(reply, "MQTT off");
-  } else if (strcmp(command, "mqtt status") == 0) {
+  } else if (strcmp(command, "mqtt status") == 0 || strcmp(command, "mqtt.status") == 0) {
     snprintf(reply, 160, "MQTT:%s running:%u host:%s", getObserverMqttStatus(),
              (unsigned int)mqtt_observer.isRunning(), _prefs.mqtt_host);
   }
 #endif
 #ifdef ENABLE_OBSERVER_SAVEPOINTS
-  else if (strcmp(command, "sp.list") == 0) {
+  else if (strcmp(command, "sp.create") == 0) {
+    char status[32];
+#if defined(ENABLE_OBSERVER_WEB_AP) && defined(ESP32)
+    uint16_t rx_bins[12];
+    uint16_t air_bins[12];
+    uint8_t bin_index;
+    updateObserverWebMetrics();
+    OBSERVER_LOCK();
+    memcpy(rx_bins, observer_web_rx_bins, sizeof(rx_bins));
+    memcpy(air_bins, observer_web_air_bins, sizeof(air_bins));
+    bin_index = observer_web_bin_index;
+    OBSERVER_UNLOCK();
+    createObserverSavepoint(rx_bins, air_bins, 12, bin_index, status, sizeof(status));
+#else
+    createObserverSavepoint(nullptr, nullptr, 0, 0, status, sizeof(status));
+#endif
+    StrHelper::strncpy(reply, status, 160);
+  } else if (strcmp(command, "sp.list") == 0) {
     File f = _fs->open(SAVEPOINT_INDEX_FILE);
     if (!f) {
       strcpy(reply, "SP none");
@@ -3203,6 +3530,19 @@ void MyMesh::handleCommand(uint32_t sender_timestamp, char *command, char *reply
     strcpy(reply, "OK - SP cleared");
   }
 #endif
+  else if (strcmp(command, "wp.help") == 0 || strcmp(command, "help wp") == 0) {
+    StrHelper::strncpy(reply,
+                       "diag\n"
+                       "ap.on/off/status\n"
+                       "view.on/off/status\n"
+                       "mqtt.on/off/status\n"
+                       "sp.create/list\n"
+                       "sp.show <id> [page]\n"
+                       "sp.delete <id>\n"
+                       "sp.clear\n"
+                       "discover.neighbors",
+                       160);
+  }
   else if (memcmp(command, "discover.neighbors", 18) == 0) {
     const char* sub = command + 18;
     while (*sub == ' ') sub++;
@@ -3213,8 +3553,8 @@ void MyMesh::handleCommand(uint32_t sender_timestamp, char *command, char *reply
       strcpy(reply, "OK - Discover sent");
     }
   } else if (strcmp(command, "diag") == 0) {
-    char diag[80];
-    char health[80];
+    char diag[96];
+    char health[140];
     getObserverDiagLine(diag, sizeof(diag));
     getObserverHealthLine(health, sizeof(health));
     snprintf(reply, 160, "%s Up:%lus RX:%lu MQTT:%lu\n%s",
@@ -3230,6 +3570,7 @@ void MyMesh::handleCommand(uint32_t sender_timestamp, char *command, char *reply
 
 void MyMesh::loop() {
 #if defined(ENABLE_OBSERVER_WEB_AP) && defined(ESP32)
+  setObserverHealthPhase(48);
   updateObserverWebMetrics();
   if (observer_web_sta_running && WiFi.status() != WL_CONNECTED && (long)(millis() - observer_web_sta_next_attempt) >= 0) {
     unsigned long now = millis();
@@ -3244,22 +3585,30 @@ void MyMesh::loop() {
   }
 #endif
 #ifdef WITH_BRIDGE
+  setObserverHealthPhase(49);
   bridge.loop();
 #endif
 #ifdef WITH_MQTT_OBSERVER
+  setObserverHealthPhase(50);
   mqtt_observer.loop();
 #endif
 
+  setObserverHealthPhase(51);
   mesh::Mesh::loop();
 
   if (next_flood_advert && millisHasNowPassed(next_flood_advert)) {
+    setObserverHealthPhase(52);
+    setObserverHealthMarker(OBS_MARKER_FLOOD_ADVERT);
+    uint32_t flood_started = millis();
     mesh::Packet *pkt = createSelfAdvert();
     uint32_t delay_millis = 0;
     if (pkt) sendFloodScoped(default_scope, pkt, delay_millis, _prefs.path_hash_mode + 1);
 
     updateFloodAdvertTimer(); // schedule next flood advert
     updateAdvertTimer();      // also schedule local advert (so they don't overlap)
+    noteObserverTiming(OBS_MARKER_FLOOD_ADVERT, millis() - flood_started);
   } else if (next_local_advert && millisHasNowPassed(next_local_advert)) {
+    setObserverHealthPhase(53);
     mesh::Packet *pkt = createSelfAdvert();
     if (pkt) sendZeroHop(pkt);
 
@@ -3267,12 +3616,14 @@ void MyMesh::loop() {
   }
 
   if (set_radio_at && millisHasNowPassed(set_radio_at)) { // apply pending (temporary) radio params
+    setObserverHealthPhase(54);
     set_radio_at = 0;                                     // clear timer
     radio_set_params(pending_freq, pending_bw, pending_sf, pending_cr);
     MESH_DEBUG_PRINTLN("Temp radio params");
   }
 
   if (revert_radio_at && millisHasNowPassed(revert_radio_at)) { // revert radio params to orig
+    setObserverHealthPhase(55);
     revert_radio_at = 0;                                        // clear timer
     radio_set_params(_prefs.freq, _prefs.bw, _prefs.sf, _prefs.cr);
     MESH_DEBUG_PRINTLN("Radio params restored");
@@ -3280,15 +3631,18 @@ void MyMesh::loop() {
 
   // is pending dirty contacts write needed?
   if (dirty_contacts_expiry && millisHasNowPassed(dirty_contacts_expiry)) {
+    setObserverHealthPhase(56);
     acl.save(_fs);
     dirty_contacts_expiry = 0;
   }
 
   // update uptime
+  setObserverHealthPhase(57);
   uint32_t now = millis();
   uptime_millis += now - last_millis;
   last_millis = now;
   updateObserverHealth();
+  setObserverHealthPhase(0);
 }
 
 // To check if there is pending work

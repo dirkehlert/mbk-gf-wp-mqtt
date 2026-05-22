@@ -62,8 +62,11 @@ public:
     display.setTextSize(2);
     display.drawTextCentered(display.width()/2, 22, _version_info);
 
+    display.drawTextCentered(display.width()/2, 44, "Fieldtest by");
+    display.drawTextCentered(display.width()/2, 66, "Moorbock");
+
     display.setTextSize(1);
-    display.drawTextCentered(display.width()/2, 42, FIRMWARE_BUILD_DATE);
+    display.drawTextCentered(display.width()/2, 94, FIRMWARE_BUILD_DATE);
 
     return 1000;
   }
@@ -148,8 +151,8 @@ class HomeScreen : public UIScreen {
 
   static const uint8_t HEAT_ROWS = 6;
   static const uint8_t HEAT_PATHS = 8;
-  static const uint8_t SEND_TARGETS = 8;
-  static const uint8_t SEND_MESSAGES = 7; // six editable messages plus GPS position
+  static const uint8_t SEND_TARGETS = 48;
+  static const uint8_t SEND_MESSAGES = 10; // nine editable messages plus GPS position
 
   enum SendMode {
     SEND_MODE_NAV,
@@ -303,10 +306,11 @@ class HomeScreen : public UIScreen {
 
     for (uint8_t r = 0; r < row_count; r++) {
       int y = 44 + r * 10;
+      int cell_y = y + 1;
       display.drawTextRightAlign(rep_w - 3, y, rows[r].rep);
       for (uint8_t p = 0; p < HEAT_PATHS; p++) {
         int x = grid_left + p * pitch;
-        drawHeatCell(display, x, y, block_w, rows[r].position[p]);
+        drawHeatCell(display, x, cell_y, block_w, rows[r].position[p]);
       }
       char pc[4];
       snprintf(pc, sizeof(pc), "%u", (unsigned int)rows[r].pc);
@@ -645,20 +649,58 @@ public:
         y = y + 12;
         display.drawTextLeftAlign(0, y, "Can't access GPS");
       } else {
-        strcpy(buf, nmea->isValid()?"fix":"no fix");
+        bool has_fix = nmea->isValid();
+        strcpy(buf, has_fix ? "fix" : "no fix");
         display.drawTextRightAlign(display.width()-1, y, buf);
         y = y + 12;
-        display.drawTextLeftAlign(0, y, "sat");
-        sprintf(buf, "%d", nmea->satellitesCount());
+        display.drawTextLeftAlign(0, y, "sats used");
+        snprintf(buf, sizeof(buf), "%ld", nmea->satellitesCount());
         display.drawTextRightAlign(display.width()-1, y, buf);
         y = y + 12;
-        display.drawTextLeftAlign(0, y, "pos");
-        sprintf(buf, "%.4f %.4f", 
-          nmea->getLatitude()/1000000., nmea->getLongitude()/1000000.);
+        display.drawTextLeftAlign(0, y, "hdop");
+        long hdop = nmea->getHDOP();
+        if (hdop >= 0) {
+          snprintf(buf, sizeof(buf), "%ld.%ld", hdop / 10, hdop % 10);
+        } else {
+          strcpy(buf, "-");
+        }
         display.drawTextRightAlign(display.width()-1, y, buf);
         y = y + 12;
-        display.drawTextLeftAlign(0, y, "alt");
-        sprintf(buf, "%.2f", nmea->getAltitude()/1000.);
+        display.drawTextLeftAlign(0, y, "utc");
+        long ts = has_fix ? nmea->getTimestamp() : 0;
+        if (ts > 0) {
+          uint32_t secs = (uint32_t)(ts % 86400L);
+          snprintf(buf, sizeof(buf), "%02lu:%02lu:%02lu",
+                   (unsigned long)(secs / 3600UL),
+                   (unsigned long)((secs / 60UL) % 60UL),
+                   (unsigned long)(secs % 60UL));
+        } else {
+          strcpy(buf, "--:--:--");
+        }
+        display.drawTextRightAlign(display.width()-1, y, buf);
+        y = y + 12;
+        display.drawTextLeftAlign(0, y, "lat");
+        if (has_fix) {
+          snprintf(buf, sizeof(buf), "%.6f", nmea->getLatitude()/1000000.);
+        } else {
+          strcpy(buf, "-");
+        }
+        display.drawTextRightAlign(display.width()-1, y, buf);
+        y = y + 12;
+        display.drawTextLeftAlign(0, y, "lon");
+        if (has_fix) {
+          snprintf(buf, sizeof(buf), "%.6f", nmea->getLongitude()/1000000.);
+        } else {
+          strcpy(buf, "-");
+        }
+        display.drawTextRightAlign(display.width()-1, y, buf);
+        y = y + 12;
+        display.drawTextLeftAlign(0, y, "alt m");
+        if (has_fix) {
+          snprintf(buf, sizeof(buf), "%.1f", nmea->getAltitude()/1000.);
+        } else {
+          strcpy(buf, "-");
+        }
         display.drawTextRightAlign(display.width()-1, y, buf);
         y = y + 12;
       }
@@ -749,8 +791,21 @@ public:
   }
 
   bool handleInput(char c) override {
+    if (c == KEY_ENTER && _page == HomePage::FIRST) {
+      if (_task->getMsgCount() > 0) {
+        _task->gotoMsgPreviewScreen();
+      } else {
+        _task->showAlert("No messages", 800);
+      }
+      return true;
+    }
     if (_page == HomePage::SEND && send_mode != SEND_MODE_NAV) {
-      if (c == KEY_LEFT || c == KEY_PREV) {
+      if (c == KEY_PREV || c == KEY_SELECT) {
+        send_mode = SEND_MODE_NAV;
+        _task->showAlert("Canceled", 800);
+        return true;
+      }
+      if (c == KEY_LEFT) {
         if (send_mode == SEND_MODE_TARGET && send_target_count > 0) {
           send_target_idx = (send_target_idx + send_target_count - 1) % send_target_count;
         } else if (send_mode == SEND_MODE_MESSAGE) {
@@ -847,32 +902,68 @@ public:
 class MsgPreviewScreen : public UIScreen {
   UITask* _task;
   mesh::RTCClock* _rtc;
+  SensorManager* _sensors;
 
   struct MsgEntry {
     uint32_t timestamp;
+    uint8_t path_len;
+    uint8_t pubkey_prefix[6];
+    uint8_t reply_channel_idx;
+    bool can_reply;
+    bool reply_to_channel;
+    bool pinned;
+    char reply_mention[32];
     char origin[62];
     char msg[78];
   };
   #define MAX_UNREAD_MSGS   32
   int num_unread;
   int head = MAX_UNREAD_MSGS - 1; // index of latest unread message
+  bool reply_mode = false;
+  uint8_t reply_idx = 0;
   MsgEntry unread[MAX_UNREAD_MSGS];
 
 public:
-  MsgPreviewScreen(UITask* task, mesh::RTCClock* rtc) : _task(task), _rtc(rtc) { num_unread = 0; }
+  MsgPreviewScreen(UITask* task, mesh::RTCClock* rtc, SensorManager* sensors)
+      : _task(task), _rtc(rtc), _sensors(sensors) {
+    num_unread = 0;
+    memset(unread, 0, sizeof(unread));
+  }
 
-  void addPreview(uint8_t path_len, const char* from_name, const char* msg) {
+  void addPreview(uint8_t path_len, const char* from_name, const uint8_t* from_pubkey,
+                  uint8_t reply_channel_idx, const char* reply_mention, const char* msg) {
     head = (head + 1) % MAX_UNREAD_MSGS;
     if (num_unread < MAX_UNREAD_MSGS) num_unread++;
+    reply_mode = false;
+    reply_idx = 0;
 
     auto p = &unread[head];
+    memset(p, 0, sizeof(*p));
     p->timestamp = _rtc->getCurrentTime();
+    p->path_len = path_len;
+    p->reply_channel_idx = reply_channel_idx;
+    p->reply_to_channel = from_pubkey == nullptr && reply_channel_idx != 0xFF;
+    p->can_reply = from_pubkey != nullptr || p->reply_to_channel;
+    if (from_pubkey) memcpy(p->pubkey_prefix, from_pubkey, sizeof(p->pubkey_prefix));
+    if (reply_mention) StrHelper::strncpy(p->reply_mention, reply_mention, sizeof(p->reply_mention));
     if (path_len == 0xFF) {
       sprintf(p->origin, "(D) %s:", from_name);
     } else {
       sprintf(p->origin, "(%d) %s:", (uint32_t) path_len, from_name);
     }
     StrHelper::strncpy(p->msg, msg, sizeof(p->msg));
+  }
+
+  void syncUnreadCount(int count) {
+    if (count <= 0) {
+      num_unread = 0;
+      memset(unread, 0, sizeof(unread));
+      head = MAX_UNREAD_MSGS - 1;
+      reply_mode = false;
+      reply_idx = 0;
+      return;
+    }
+    num_unread = count > MAX_UNREAD_MSGS ? MAX_UNREAD_MSGS : count;
   }
 
   int render(DisplayDriver& display) override {
@@ -882,6 +973,18 @@ public:
     display.setColor(DisplayDriver::GREEN);
     sprintf(tmp, "Unread: %d", num_unread);
     display.print(tmp);
+
+    if (num_unread <= 0) {
+      display.drawRect(0, 11, display.width(), 1);
+      display.setCursor(0, 25);
+      display.setColor(DisplayDriver::LIGHT);
+      display.print("No messages");
+#if AUTO_OFF_MILLIS==0
+      return 10000;
+#else
+      return 1000;
+#endif
+    }
 
     auto p = &unread[head];
 
@@ -904,7 +1007,33 @@ public:
     display.translateUTF8ToBlocks(filtered_origin, p->origin, sizeof(filtered_origin));
     display.print(filtered_origin);
 
+    char path_line[24];
+    if (p->path_len == 0xFF) {
+      snprintf(path_line, sizeof(path_line), "%sPath: direct", p->pinned ? "* " : "");
+    } else {
+      snprintf(path_line, sizeof(path_line), "%sPath: %u hops", p->pinned ? "* " : "",
+               (unsigned int)p->path_len);
+    }
     display.setCursor(0, 25);
+    display.setColor(DisplayDriver::GREEN);
+    display.print(path_line);
+
+    if (reply_mode) {
+      display.setCursor(0, 38);
+      display.setColor(DisplayDriver::LIGHT);
+      display.print("Reply:");
+      char reply[112];
+      buildReplyText(*p, reply, sizeof(reply));
+      display.setCursor(0, 50);
+      display.printWordWrap(reply, display.width());
+#if AUTO_OFF_MILLIS==0
+      return 10000;
+#else
+      return 1000;
+#endif
+    }
+
+    display.setCursor(0, 38);
     display.setColor(DisplayDriver::LIGHT);
     char filtered_msg[sizeof(p->msg)];
     display.translateUTF8ToBlocks(filtered_msg, p->msg, sizeof(filtered_msg));
@@ -918,20 +1047,130 @@ public:
   }
 
   bool handleInput(char c) override {
+    auto p = &unread[head];
+    if (reply_mode && num_unread > 0) {
+      uint8_t count = getReplyMessageCount();
+      if (c == KEY_NEXT || c == KEY_RIGHT || c == KEY_LEFT || c == KEY_PREV) {
+        if (count > 0) reply_idx = (reply_idx + 1) % count;
+        return true;
+      }
+      if (c == KEY_ENTER) {
+        char reply[112];
+        buildReplyText(*p, reply, sizeof(reply));
+        bool sent_flood = false;
+        bool sent = false;
+        if (p->reply_to_channel) {
+          sent = the_mesh.sendQuickChannelReply(p->reply_channel_idx, p->reply_mention, reply);
+        } else {
+          sent = p->can_reply &&
+                 the_mesh.sendQuickReply(p->pubkey_prefix, sizeof(p->pubkey_prefix), reply, &sent_flood);
+        }
+        _task->notify(sent ? UIEventType::ack : UIEventType::none);
+        _task->showAlert(sent ? (p->reply_to_channel ? "Reply channel" : (sent_flood ? "Reply flood" : "Reply sent")) : "Reply failed", 1000);
+        reply_mode = false;
+        if (sent && !p->pinned) {
+          removeCurrent();
+        }
+        return true;
+      }
+    }
+
+    if (c == KEY_LEFT || c == KEY_PREV) {
+      if (num_unread <= 0) return true;
+      p->pinned = !p->pinned;
+      _task->showAlert(p->pinned ? "Pinned" : "Unpinned", 800);
+      return true;
+    }
+
     if (c == KEY_NEXT || c == KEY_RIGHT) {
+      if (num_unread <= 0) {
+        num_unread = 0;
+        _task->gotoHomeScreen();
+        return true;
+      }
+      if (p->pinned) {
+        _task->showAlert("Pinned", 800);
+        _task->gotoHomeScreen();
+        return true;
+      }
       head = (head + MAX_UNREAD_MSGS - 1) % MAX_UNREAD_MSGS;
       num_unread--;
       if (num_unread == 0) {
-        _task->gotoHomeScreen();
+        _task->msgRead(0);
+      } else {
+        _task->msgRead(num_unread);
       }
       return true;
     }
     if (c == KEY_ENTER) {
-      num_unread = 0;  // clear unread queue
-      _task->gotoHomeScreen();
+      if (num_unread <= 0) return true;
+      if (!p->can_reply) {
+        _task->showAlert("No reply target", 1000);
+        return true;
+      }
+      reply_mode = true;
+      reply_idx = 0;
       return true;
     }
     return false;
+  }
+
+private:
+  void removeCurrent() {
+    if (num_unread <= 0) {
+      _task->msgRead(0);
+      return;
+    }
+
+    memset(&unread[head], 0, sizeof(unread[head]));
+    num_unread--;
+    if (num_unread <= 0) {
+      _task->msgRead(0);
+      return;
+    }
+
+    head = (head + MAX_UNREAD_MSGS - 1) % MAX_UNREAD_MSGS;
+    _task->msgRead(num_unread);
+  }
+
+  void buildReplyText(const MsgEntry& entry, char* dest, size_t dest_size) const {
+    if (!dest || dest_size == 0) return;
+    uint8_t quick_count = the_mesh.getQuickMessageCount();
+    if (reply_idx < quick_count) {
+      snprintf(dest, dest_size, "%s", the_mesh.getQuickMessage(reply_idx));
+      return;
+    }
+
+    if (reply_idx == getGpsReplyIndex()) {
+#if ENV_INCLUDE_GPS == 1
+      LocationProvider* gps = _sensors ? _sensors->getLocationProvider() : nullptr;
+      if (!gps || !gps->isValid()) {
+        snprintf(dest, dest_size, "Meine Position ist: kein GPS fix");
+        return;
+      }
+      double lat = ((double)gps->getLatitude()) / 1000000.0;
+      double lon = ((double)gps->getLongitude()) / 1000000.0;
+      snprintf(dest, dest_size, "Meine Position ist: %.6f, %.6f", lat, lon);
+#else
+      snprintf(dest, dest_size, "Meine Position ist: GPS nicht verfuegbar");
+#endif
+      return;
+    }
+
+    if (entry.path_len == 0xFF) {
+      snprintf(dest, dest_size, "predef sent from M1 Node : received you. hopcount: direct");
+    } else {
+      snprintf(dest, dest_size, "predef sent from M1 Node : received you. hopcount: %u",
+               (unsigned int)entry.path_len);
+    }
+  }
+
+  uint8_t getGpsReplyIndex() const {
+    return the_mesh.getQuickMessageCount();
+  }
+
+  uint8_t getReplyMessageCount() const {
+    return the_mesh.getQuickMessageCount() + 2;
   }
 };
 
@@ -970,7 +1209,7 @@ void UITask::begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* no
 
   splash = new SplashScreen(this);
   home = new HomeScreen(this, &rtc_clock, sensors, node_prefs);
-  msg_preview = new MsgPreviewScreen(this, &rtc_clock);
+  msg_preview = new MsgPreviewScreen(this, &rtc_clock, sensors);
   setCurrScreen(splash);
 }
 
@@ -1011,15 +1250,21 @@ switch(t){
 
 void UITask::msgRead(int msgcount) {
   _msgcount = msgcount;
+  if (msg_preview) {
+    ((MsgPreviewScreen *)msg_preview)->syncUnreadCount(msgcount);
+  }
   if (msgcount == 0) {
     gotoHomeScreen();
   }
 }
 
-void UITask::newMsg(uint8_t path_len, const char* from_name, const char* text, int msgcount) {
+void UITask::newMsg(uint8_t path_len, const char* from_name, const uint8_t* from_pubkey,
+                    uint8_t reply_channel_idx, const char* reply_mention,
+                    const char* text, int msgcount) {
   _msgcount = msgcount;
 
-  ((MsgPreviewScreen *) msg_preview)->addPreview(path_len, from_name, text);
+  ((MsgPreviewScreen *) msg_preview)->addPreview(path_len, from_name, from_pubkey,
+                                                 reply_channel_idx, reply_mention, text);
   if (curr == msg_preview) {
     setCurrScreen(msg_preview);
   }
@@ -1059,6 +1304,14 @@ void UITask::userLedHandler() {
 void UITask::setCurrScreen(UIScreen* c) {
   curr = c;
   _next_refresh = 100;
+}
+
+void UITask::gotoMsgPreviewScreen() {
+  if (_msgcount > 0) {
+    setCurrScreen(msg_preview);
+  } else {
+    showAlert("No messages", 800);
+  }
 }
 
 /*

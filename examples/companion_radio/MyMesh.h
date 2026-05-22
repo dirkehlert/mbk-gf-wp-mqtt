@@ -141,6 +141,8 @@ public:
   uint8_t getQuickMessageCount() const;
   const char* getQuickMessage(uint8_t index) const;
   bool sendQuickText(const QuickSendTarget& target, const char* text, bool* sent_flood = NULL);
+  bool sendQuickReply(const uint8_t* pubkey_prefix, uint8_t prefix_len, const char* text, bool* sent_flood = NULL);
+  bool sendQuickChannelReply(uint8_t channel_idx, const char* mention, const char* text);
   uint32_t getMonitorRxPackets() const { return monitor_rx_packets; }
   int getMonitorNoiseFloor() const { return _radio->getNoiseFloor(); }
   float getMonitorLastSnr() const { return monitor_last_snr_x4 / 4.0f; }
@@ -249,6 +251,10 @@ private:
   void loadQuickMessages();
   bool saveQuickMessages();
   void printQuickMessages();
+  bool isMonitorHeatstripRequest(const char* text) const;
+  bool isDisplayableText(const char* text) const;
+  void formatMonitorHeatstripReply(char* dest, size_t dest_size) const;
+  bool sendMonitorHeatstripReply(const ContactInfo& recipient);
   void monitorRollActivity();
   void rememberMonitorPath(const mesh::Packet* packet);
   void rememberMonitorLastHop(const mesh::Packet* packet, int8_t snr_x4);
@@ -273,7 +279,7 @@ private:
   bool _iter_started;
   bool _cli_rescue;
   char cli_command[128];
-  static const uint8_t QUICK_MESSAGE_SLOTS = 6;
+  static const uint8_t QUICK_MESSAGE_SLOTS = 9;
   static const uint8_t QUICK_MESSAGE_SIZE = 80;
   char quick_messages[QUICK_MESSAGE_SLOTS][QUICK_MESSAGE_SIZE];
   uint8_t app_target_ver;

@@ -850,6 +850,134 @@ bool MyMesh::sendQuickText(const QuickSendTarget& target, const char* text, bool
   return true;
 }
 
+bool MyMesh::sendQuickReply(const uint8_t* pubkey_prefix, uint8_t prefix_len, const char* text, bool* sent_flood) {
+  if (sent_flood) *sent_flood = false;
+  if (!pubkey_prefix || prefix_len == 0 || !text || !text[0]) return false;
+
+  ContactInfo* recipient = lookupContactByPubKey(pubkey_prefix, prefix_len);
+  if (!recipient) return false;
+
+  uint32_t expected_ack = 0;
+  uint32_t est_timeout = 0;
+  int result = sendMessage(*recipient, getRTCClock()->getCurrentTimeUnique(), 0, text, expected_ack, est_timeout);
+  if (result == MSG_SEND_FAILED) return false;
+
+  if (sent_flood) *sent_flood = (result == MSG_SEND_SENT_FLOOD);
+  if (expected_ack) {
+    expected_ack_table[next_ack_idx].msg_sent = _ms->getMillis();
+    expected_ack_table[next_ack_idx].ack = expected_ack;
+    expected_ack_table[next_ack_idx].contact = recipient;
+    next_ack_idx = (next_ack_idx + 1) % EXPECTED_ACK_TABLE_SIZE;
+  }
+  return true;
+}
+
+bool MyMesh::sendQuickChannelReply(uint8_t channel_idx, const char* mention, const char* text) {
+#ifdef MAX_GROUP_CHANNELS
+  if (!text || !text[0]) return false;
+
+  ChannelDetails channel;
+  if (!getChannel(channel_idx, channel) || channel.name[0] == 0) return false;
+
+  char reply[MAX_TEXT_LEN + 1];
+  if (mention && mention[0]) {
+    snprintf(reply, sizeof(reply), "@%s %s", mention, text);
+  } else {
+    snprintf(reply, sizeof(reply), "%s", text);
+  }
+  return sendGroupMessage(getRTCClock()->getCurrentTimeUnique(), channel.channel, _prefs.node_name,
+                          reply, strlen(reply));
+#else
+  return false;
+#endif
+}
+
+bool MyMesh::isMonitorHeatstripRequest(const char* text) const {
+  if (!text) return false;
+  while (*text == ' ' || *text == '\t') text++;
+  return strcmp(text, "SHOWPATHS") == 0;
+}
+
+bool MyMesh::isDisplayableText(const char* text) const {
+  if (!text || !text[0]) return false;
+
+  bool has_printable = false;
+  for (size_t i = 0; i < MAX_TEXT_LEN && text[i]; i++) {
+    uint8_t c = (uint8_t)text[i];
+    if (c >= 0x20) {
+      has_printable = true;
+      continue;
+    }
+    if (c == '\r' || c == '\n' || c == '\t') continue;
+    return false;
+  }
+  return has_printable;
+}
+
+static bool companionNextPathToken(char*& cursor, char* dest, size_t dest_size) {
+  if (!cursor || !dest || dest_size == 0) return false;
+  while (*cursor == ' ') cursor++;
+  if (*cursor == 0) return false;
+  size_t pos = 0;
+  while (*cursor && *cursor != ' ') {
+    if (pos + 1 < dest_size) dest[pos++] = *cursor;
+    cursor++;
+  }
+  dest[pos] = 0;
+  return pos > 0;
+}
+
+void MyMesh::formatMonitorHeatstripReply(char* dest, size_t dest_size) const {
+  if (!dest || dest_size == 0) return;
+  dest[0] = 0;
+
+  static const uint8_t HEAT_PATHS = 8;
+  char line[80];
+  if (!getMonitorPathLine(0, line, sizeof(line))) {
+    snprintf(dest, dest_size, "Paths:\nNo RX paths");
+    return;
+  }
+
+  int written = snprintf(dest, dest_size, "Paths:");
+  if (written < 0) return;
+  size_t pos = min((size_t)written, dest_size - 1);
+  for (uint8_t i = 0; i < HEAT_PATHS && pos + 1 < dest_size; i++) {
+    if (!getMonitorPathLine(i, line, sizeof(line))) break;
+
+    char work[80];
+    snprintf(work, sizeof(work), "%s", line);
+    char* cursor = work;
+    char count[8];
+    if (!companionNextPathToken(cursor, count, sizeof(count))) continue;
+
+    char path[48] = "";
+    char token[12];
+    while (companionNextPathToken(cursor, token, sizeof(token))) {
+      if (strcmp(token, "+") == 0) continue;
+      if (path[0]) strncat(path, " ", sizeof(path) - strlen(path) - 1);
+      strncat(path, token, sizeof(path) - strlen(path) - 1);
+    }
+    if (!path[0]) StrHelper::strncpy(path, "-", sizeof(path));
+
+    int n = snprintf(&dest[pos], dest_size - pos, "\n%u (%s): %s",
+                     (unsigned int)i + 1, count, path);
+    if (n < 0) break;
+    if ((size_t)n >= dest_size - pos) {
+      dest[dest_size - 1] = 0;
+      break;
+    }
+    pos += (size_t)n;
+  }
+}
+
+bool MyMesh::sendMonitorHeatstripReply(const ContactInfo& recipient) {
+  char reply[MAX_TEXT_LEN + 1];
+  formatMonitorHeatstripReply(reply, sizeof(reply));
+  uint32_t expected_ack = 0;
+  uint32_t est_timeout = 0;
+  return sendMessage(recipient, getRTCClock()->getCurrentTimeUnique(), 0, reply, expected_ack, est_timeout) != MSG_SEND_FAILED;
+}
+
 static bool readTextLine(File& file, char* dest, size_t dest_size) {
   if (!dest || dest_size == 0) return false;
   size_t pos = 0;
@@ -872,7 +1000,10 @@ void MyMesh::resetQuickMessages() {
     "Komme gleich",
     "Bitte wiederholen",
     "Alles ok",
-    "Danke"
+    "Danke",
+    "Bitte anrufen.",
+    "Test aus Gifhorn",
+    "Test aus Wolfsburg"
   };
   for (uint8_t i = 0; i < QUICK_MESSAGE_SLOTS; i++) {
     StrHelper::strncpy(quick_messages[i], defaults[i], sizeof(quick_messages[i]));
@@ -982,9 +1113,11 @@ void MyMesh::queueMessage(const ContactInfo &from, uint8_t txt_type, mesh::Packe
 
 #ifdef DISPLAY_CLASS
   // we only want to show text messages on display, not cli data
-  bool should_display = txt_type == TXT_TYPE_PLAIN || txt_type == TXT_TYPE_SIGNED_PLAIN;
+  bool should_display = (txt_type == TXT_TYPE_PLAIN || txt_type == TXT_TYPE_SIGNED_PLAIN) &&
+                        isDisplayableText(text);
   if (should_display && _ui) {
-    _ui->newMsg(path_len, from.name, text, offline_queue_len);
+    uint8_t display_path_len = path_len == 0xFF ? 0xFF : pkt->getPathHashCount();
+    _ui->newMsg(display_path_len, from.name, from.id.pub_key, 0xFF, nullptr, text, offline_queue_len);
     if (!_serial->isConnected()) {
       _ui->notify(UIEventType::contactMessage);
     }
@@ -1033,6 +1166,14 @@ void MyMesh::sendFloodScoped(const mesh::GroupChannel& channel, mesh::Packet* pk
 void MyMesh::onMessageRecv(const ContactInfo &from, mesh::Packet *pkt, uint32_t sender_timestamp,
                            const char *text) {
   markConnectionActive(from); // in case this is from a server, and we have a connection
+  if (isMonitorHeatstripRequest(text)) {
+    sendMonitorHeatstripReply(from);
+    return;
+  }
+  if (!isDisplayableText(text)) {
+    MESH_DEBUG_PRINTLN("onMessageRecv: dropping non-displayable text payload");
+    return;
+  }
   queueMessage(from, TXT_TYPE_PLAIN, pkt, sender_timestamp, NULL, 0, text);
 }
 
@@ -1093,7 +1234,19 @@ void MyMesh::onChannelMessageRecv(const mesh::GroupChannel &channel, mesh::Packe
   if (getChannel(channel_idx, channel_details)) {
     channel_name = channel_details.name;
   }
-  if (_ui) _ui->newMsg(path_len, channel_name, text, offline_queue_len);
+  if (_ui && isDisplayableText(text)) {
+    uint8_t display_path_len = path_len == 0xFF ? 0xFF : pkt->getPathHashCount();
+    char mention[32] = "";
+    const char* colon = strchr(text, ':');
+    if (colon && colon > text) {
+      size_t len = colon - text;
+      while (len > 0 && text[len - 1] == ' ') len--;
+      if (len >= sizeof(mention)) len = sizeof(mention) - 1;
+      memcpy(mention, text, len);
+      mention[len] = 0;
+    }
+    _ui->newMsg(display_path_len, channel_name, nullptr, channel_idx, mention, text, offline_queue_len);
+  }
 #endif
 }
 
@@ -1877,6 +2030,9 @@ void MyMesh::handleCmdFrame(size_t len) {
     } else {
       out_frame[0] = RESP_CODE_NO_MORE_MESSAGES;
       _serial->writeFrame(out_frame, 1);
+#ifdef DISPLAY_CLASS
+      if (_ui) _ui->msgRead(0);
+#endif
     }
   } else if (cmd_frame[0] == CMD_SET_RADIO_PARAMS) {
     int i = 1;

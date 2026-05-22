@@ -1,20 +1,82 @@
 # MBK GF WP Field Monitor
 
-Projekt-Spec fuer einen Heltec Wireless Paper Node als mobiles MeshCore
-Feld-Monitoring-Geraet.
+Mobiler MeshCore-Feldmonitor fuer ein Heltec Wireless Paper. Das Geraet laeuft
+als passiver Observer im Mesh, zeigt Empfangslage und Pfade direkt auf dem
+E-Ink-Display und kann Messpunkte als Savepoints speichern.
 
-## Ziel
+Der Fokus liegt auf Feldtests im Bereich Braunschweig/Gifhorn: Standorte,
+Antennen, Filter, Repeater-Pfade, Noise Floor, SNR und Netzlast lassen sich
+ohne Laptop, WLAN oder MQTT direkt am Geraet beurteilen. WLAN/Web und MQTT sind
+als optionale Nebenstrecken vorhanden, bleiben im aktuellen Build beim Boot aber
+aus.
 
-Das Heltec Wireless Paper dient aktuell vor allem als passiver Feldmonitor fuer
-MeshCore im Bereich Braunschweig/Gifhorn. Im Vordergrund stehen Empfangs- und
-Aktivitaetsanalyse direkt am Geraet: gehoerte Pakete, Pfade, letzte Hops,
-Noise Floor, SNR, Histogramme und Savepoints fuer Tests mit Standorten,
-Antennen und Filtern.
+![Aktueller Display-Snapshot](docs/screen-current.png)
 
-MQTT ist als vorbereitete Nebenstrecke integriert, steht derzeit aber nicht im
-Fokus. Der Node soll auch ohne WLAN/MQTT vollstaendig fuer das lokale
-Monitoring im Feld nutzbar bleiben. Das Geraet ist im Mesh als `MBK GF WP MQTT`
-sichtbar.
+## Highlights
+
+- Live-Observer fuer MeshCore RX-Aktivitaet, Pfade, letzte Hops und SNR
+- E-Ink UI mit Status, Paths, Heards, Heatstrip, Load, Savepoints und MQTT
+- Savepoints im SPIFFS-Flash fuer reproduzierbare Standort- und Antennentests
+- Bedienung per Taste, serieller CLI oder MeshCore-Client
+- Optionaler Field-Web-AP unter `http://192.168.4.1/`
+- Optionaler MQTT-Publish von RX/TX-Paketen
+- RTC-Breadcrumbs fuer Reset-/Watchdog-Diagnose auf ESP32-S3
+
+## Schnellstart
+
+Build:
+
+```sh
+pio run -e Heltec_Wireless_Paper_mqtt_observer
+```
+
+Flash, wenn das WP per USB angeschlossen ist:
+
+```sh
+pio run -e Heltec_Wireless_Paper_mqtt_observer -t upload --upload-port /dev/cu.usbserial-0001
+```
+
+Serieller Smoke-Test:
+
+```sh
+python tools/wp_smoke.py --port /dev/cu.usbserial-0001
+```
+
+Die absolute PlatformIO-Python-Umgebung des lokalen Entwicklungsrechners kann
+ebenfalls genutzt werden:
+
+```sh
+/Users/dirkehlert/.platformio/penv/bin/pio run -e Heltec_Wireless_Paper_mqtt_observer
+```
+
+## MeshCore-Client CLI
+
+Das WP nimmt Admin-CLI-Kommandos auch ueber den MeshCore-Client entgegen. Das
+ist im Feld oft der angenehmste Weg, weil kein USB-Kabel noetig ist.
+
+```text
+wp.help
+diag
+ap.on
+ap.status
+ap.off
+view.on
+view.status
+view.off
+mqtt.on
+mqtt.status
+mqtt.off
+sp.create
+sp.list
+sp.show <id> [page]
+sp.delete <id>
+sp.clear
+discover.neighbors
+```
+
+Langformen wie `web.ap on`, `web.view status` und `mqtt status` bleiben
+weiterhin gueltig. `screen.dump` ist bewusst nur seriell sinnvoll, weil es
+Bilddaten ausgibt.
 
 ## Hardware
 
@@ -26,7 +88,8 @@ sichtbar.
 
 ## PlatformIO Environment
 
-Build- und Upload-Environment:
+Build- und Upload-Environment, wenn die lokale PlatformIO-Umgebung direkt
+verwendet werden soll:
 
 ```sh
 /Users/dirkehlert/.platformio/penv/bin/pio run -e Heltec_Wireless_Paper_mqtt_observer
@@ -80,16 +143,19 @@ soll.
 CLI-Kommandos:
 
 ```text
-web.ap on
-web.ap status
-web.ap off
-web.view on
-web.view status
-web.view off
-mqtt on
-mqtt status
-mqtt off
+ap.on
+ap.status
+ap.off
+view.on
+view.status
+view.off
+mqtt.on
+mqtt.status
+mqtt.off
 ```
+
+Die aelteren Langformen `web.ap on|off|status`, `web.view on|off|status` und
+`mqtt on|off|status` bleiben als Aliases verfuegbar.
 
 Alternativ kann der Field-Web-AP direkt am Geraet auf dem MQTT-Screen per
 Doppelklick ein- und ausgeschaltet werden.
@@ -99,9 +165,9 @@ wechselt. Beim Stop des AP wird MQTT wieder gestartet, sofern MQTT in den Prefs
 aktiviert ist.
 
 Der WLAN-Station-Viewmodus wird auf dem MQTT-Screen per Long Press aktiviert
-oder per `web.view on` gestartet. Dabei verbindet sich der Node mit dem
+oder per `view.on` gestartet. Dabei verbindet sich der Node mit dem
 konfigurierten WLAN und stellt dieselbe Webseite im lokalen Netz bereit. MQTT
-wird dabei persistent deaktiviert und bleibt aus, bis es explizit per `mqtt on`
+wird dabei persistent deaktiviert und bleibt aus, bis es explizit per `mqtt.on`
 oder `set mqtt.enabled on` wieder aktiviert wird.
 
 Wenn die WLAN-Verbindung im Viewmodus verloren geht, versucht der Node sie in
@@ -217,21 +283,15 @@ erwartetes Payload-Format sinnvoll sein.
 
 ## Display
 
-![Aktueller Display-Snapshot](docs/screen-current.png)
-
 Screen-Galerie:
 
 | Status | Paths | Heards |
 | --- | --- | --- |
 | ![Status](docs/screens/00-status.png) | ![Paths](docs/screens/01-paths.png) | ![Heards](docs/screens/02-heards.png) |
 
-| Heatstrip | Load | Savepoints |
+| Heatstrip | Savepoints | MQTT |
 | --- | --- | --- |
-| ![Heatstrip](docs/screens/03-heatstrip.png) | ![Load](docs/screens/04-load.png) | ![Savepoints](docs/screens/05-savepoints.png) |
-
-| MQTT |
-| --- |
-| ![MQTT](docs/screens/06-mqtt.png) |
+| ![Heatstrip](docs/screens/03-heatstrip.png) | ![Savepoints](docs/screens/04-savepoints.png) | ![MQTT](docs/screens/05-mqtt.png) |
 
 Status-Screen:
 
@@ -317,6 +377,33 @@ lokal gesetzt:
 
 Savepoints speichern die aktuelle UTC-Zeit, sofern sie zuvor gesetzt wurde.
 
+## Diagnose
+
+`diag` ist der wichtigste schnelle Gesundheitscheck. Der Befehl funktioniert
+seriell und ueber den MeshCore-Client:
+
+```text
+Boot:PowerOn B:1 H:277k/270k IRQ:4/1544ms Up:16s RX:4 MQTT:0
+Prev:none H:277k/270k
+```
+
+Die Felder:
+
+- `Boot`: aktueller Reset-Grund, z. B. `PowerOn`, `Sleep`, `IntWDT`
+- `B`: Boot-Counter aus dem RTC-Breadcrumb
+- `H`: freier/minimaler Heap in KiB
+- `IRQ`: gezaehlte Radio-IRQs und Alter des letzten IRQs
+- `Up`: Uptime seit Boot
+- `RX`/`MQTT`: lokale Observer-Zaehler
+- `Prev`: letzter persistierter Screen/Phase/Marker vor dem Reset
+
+Bei Watchdog-Resets helfen die Marker in `Prev`, um den letzten aktiven
+Subsystembereich einzugrenzen:
+
+```text
+1 radio recv, 2 decode, 3 forward, 4 send, 5 display, 6 CLI, 7 flood advert
+```
+
 ## Lokale Secrets
 
 WLAN- und MQTT-Passwoerter werden nicht versioniert. Fuer lokale Builds:
@@ -359,6 +446,11 @@ Tasten:
 - Button 1: naechste Seite
 - Button 2: vorige Seite
 - Long Press auf dem Send-Screen: Auswahl bestaetigen bzw. senden
+- Button 2 im Send-Dialog: Auswahl abbrechen
+- Long Press auf einer angezeigten Nachricht: Reply-Auswahl oeffnen bzw.
+  ausgewaehlte Antwort senden
+- Button 1 in der Reply-Auswahl: vordefinierte Antwort weiterschalten
+- Button 2 auf einer Nachricht: Nachricht pinnen oder entpinnen
 
 Screens:
 
@@ -371,7 +463,9 @@ Screens:
 
 Send-Screen:
 
-- Ziele sind konfigurierte Kanaele und zuletzt gehoerte Kontakte
+- Ziele sind konfigurierte Kanaele und zuletzt gehoerte Kontakte; die lokale
+  Auswahlliste fasst 48 Ziele, damit auch Channel-Slots hinter den ersten acht
+  Eintraegen sichtbar bleiben
 - Kanalnachrichten werden als lokale Echo-Nachricht in die App-Queue gelegt,
   damit sie in der verbundenen App sichtbar werden
 - Direkte Node-Nachrichten werden gesendet, aber nicht als lokales Echo
@@ -379,12 +473,26 @@ Send-Screen:
 - Die letzte dynamische Nachricht sendet die aktuelle GPS-Position als
   `Meine Position ist: <lat>, <lon>`, sofern ein gueltiger Fix vorliegt
 
+Message-Reply:
+
+- Eingehende direkte Nachrichten koennen direkt an den Absender beantwortet
+  werden
+- Kanalnachrichten werden auf demselben Kanal beantwortet und erwaehnen den
+  erkannten Absender mit `@Name`, sofern der Ursprung im Text erkennbar ist
+- Die Message-Ansicht zeigt den Receive-Pfad als `direct` oder Hopcount an
+- Nach erfolgreichem Reply wird die urspruengliche Nachricht vom Geraet
+  entfernt, ausser sie ist gepinnt
+- Gepinnte Nachrichten bleiben sichtbar und koennen per Button 2 wieder
+  entpinnt werden
+- Zusaetzlich zu den gespeicherten Quick Messages gibt es dynamische Replies
+  fuer GPS-Position und `predef sent from M1 Node : received you. hopcount: ...`
+
 Quick-Message-CLI:
 
 ```text
 qm.list
-qm.set <1-6> <text>
-qm.clear <1-6>
+qm.set <1-9> <text>
+qm.clear <1-9>
 qm.reset
 ```
 
@@ -399,11 +507,15 @@ Savepoints werden gehalten; beim 11. Savepoint wird der aelteste geloescht.
 CLI-Kommandos:
 
 ```text
+sp.create
 sp.list
 sp.show <id> [page]
 sp.delete <id>
 sp.clear
 ```
+
+`sp.create` erzeugt denselben Snapshot wie die Taste oder die Web-API:
+Metadaten, Funkparameter, Batterie, Pfade, Heards, RX-Historie und Airtime.
 
 `sp.show <id>` gibt eine kompakte Zusammenfassung mit RX/MQTT, NF, SNR,
 Batterie sowie erstem Pfad und erstem Heard-Eintrag aus. `sp.show <id> <page>`

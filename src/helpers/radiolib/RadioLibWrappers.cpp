@@ -12,6 +12,9 @@
 #define SAMPLING_THRESHOLD  14
 
 static volatile uint8_t state = STATE_IDLE;
+static volatile uint32_t irq_count = 0;
+static volatile uint32_t last_irq_micros = 0;
+static uint32_t max_recv_raw_millis = 0;
 
 // this function is called when a complete packet
 // is transmitted by the module
@@ -20,7 +23,8 @@ static
   ICACHE_RAM_ATTR
 #endif
 void setFlag(void) {
-  // we sent a packet, set the flag
+  irq_count++;
+  last_irq_micros = micros();
   state |= STATE_INT_READY;
 }
 
@@ -107,6 +111,7 @@ bool RadioLibWrapper::isInRecvMode() const {
 }
 
 int RadioLibWrapper::recvRaw(uint8_t* bytes, int sz) {
+  uint32_t started = millis();
   int len = 0;
   if (state & STATE_INT_READY) {
     len = _radio->getPacketLength();
@@ -133,7 +138,23 @@ int RadioLibWrapper::recvRaw(uint8_t* bytes, int sz) {
       MESH_DEBUG_PRINTLN("RadioLibWrapper: error: startReceive(%d)", err);
     }
   }
+  uint32_t elapsed = millis() - started;
+  if (elapsed > max_recv_raw_millis) {
+    max_recv_raw_millis = elapsed;
+  }
   return len;
+}
+
+uint32_t RadioLibWrapper::getIrqCount() const {
+  return irq_count;
+}
+
+uint32_t RadioLibWrapper::getLastIrqMicros() const {
+  return last_irq_micros;
+}
+
+uint32_t RadioLibWrapper::getMaxRecvRawMillis() const {
+  return max_recv_raw_millis;
 }
 
 uint32_t RadioLibWrapper::getEstAirtimeFor(int len_bytes) {

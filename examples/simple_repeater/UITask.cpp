@@ -359,7 +359,12 @@ void UITask::updateRxActivityBins() {
   }
 
   bool changed = false;
+  bool phase_marked = false;
   unsigned long now = millis();
+  if ((long)(now - _next_activity_rollover) >= 0) {
+    _mesh->setObserverHealthPhase(4);
+    phase_marked = true;
+  }
   while ((long)(now - _next_activity_rollover) >= 0) {
     _activity_bin_index = (_activity_bin_index + 1) % RX_ACTIVITY_BINS;
     _activity_bins[_activity_bin_index] = 0;
@@ -370,6 +375,10 @@ void UITask::updateRxActivityBins() {
 
   uint32_t rx_total = _mesh->getObserverRxPackets();
   if (rx_total != _activity_prev_rx_total) {
+    if (!phase_marked) {
+      _mesh->setObserverHealthPhase(4);
+      phase_marked = true;
+    }
     uint32_t delta = rx_total - _activity_prev_rx_total;
     uint32_t value = (uint32_t)_activity_bins[_activity_bin_index] + delta;
 
@@ -380,6 +389,10 @@ void UITask::updateRxActivityBins() {
 
   uint32_t air_ms = _mesh->getObserverRxAirTimeMillis();
   if (air_ms != _activity_prev_air_ms) {
+    if (!phase_marked) {
+      _mesh->setObserverHealthPhase(4);
+      phase_marked = true;
+    }
     uint32_t delta = air_ms - _activity_prev_air_ms;
     uint32_t value = (uint32_t)_airtime_bins[_activity_bin_index] + delta;
     _airtime_bins[_activity_bin_index] = value > UINT16_MAX ? UINT16_MAX : (uint16_t)value;
@@ -395,6 +408,9 @@ void UITask::updateRxActivityBins() {
 #endif
       )) {
     _next_refresh = 0;
+  }
+  if (phase_marked) {
+    _mesh->setObserverHealthPhase(0);
   }
 }
 
@@ -1053,9 +1069,13 @@ void UITask::loop() {
 
   if (_display->isOn()) {
     if (millis() >= _next_refresh) {
+      if (_mesh) _mesh->setObserverHealthPhase(1);
       _display->startFrame();
+      if (_mesh) _mesh->setObserverHealthPhase(2);
       renderCurrScreen();
+      if (_mesh) _mesh->setObserverHealthPhase(3);
       _display->endFrame();
+      if (_mesh) _mesh->setObserverHealthPhase(0);
 
       bool slow_screen =
 #ifdef FIELD_MONITOR_LITE

@@ -1,5 +1,9 @@
 #include "Dispatcher.h"
 
+#if defined(ARDUINO)
+  #include <Arduino.h>
+#endif
+
 #if MESH_PACKET_LOGGING
   #include <Arduino.h>
 #endif
@@ -193,7 +197,9 @@ void Dispatcher::checkRecv() {
   uint32_t air_time;
   {
     uint8_t raw[MAX_TRANS_UNIT+1];
+    unsigned long recv_start = _ms->getMillis();
     int len = _radio->recvRaw(raw, MAX_TRANS_UNIT);
+    noteDispatchTiming(1, _ms->getMillis() - recv_start);
     if (len > 0) {
       logRxRaw(_radio->getLastSNR(), _radio->getLastRSSI(), raw, len);
 
@@ -201,6 +207,8 @@ void Dispatcher::checkRecv() {
       if (pkt == NULL) {
         MESH_DEBUG_PRINTLN("%s Dispatcher::checkRecv(): WARNING: received data, no unused packets available!", getLogDateTime());
       } else {
+        noteDispatchTiming(2, UINT32_MAX);
+        unsigned long parse_start = _ms->getMillis();
         if (tryParsePacket(pkt, raw, len)) {
           pkt->_snr = _radio->getLastSNR() * 4.0f;
           score = _radio->packetScore(_radio->getLastSNR(), len);
@@ -210,6 +218,7 @@ void Dispatcher::checkRecv() {
           _mgr->free(pkt);  // put back into pool
           pkt = NULL;
         }
+        noteDispatchTiming(2, _ms->getMillis() - parse_start);
       }
     } else {
       pkt = NULL;
@@ -258,7 +267,10 @@ void Dispatcher::checkRecv() {
 }
 
 void Dispatcher::processRecvPacket(Packet* pkt) {
+  noteDispatchTiming(3, UINT32_MAX);
+  unsigned long process_start = _ms->getMillis();
   DispatcherAction action = onRecvPacket(pkt);
+  noteDispatchTiming(3, _ms->getMillis() - process_start);
   if (action == ACTION_RELEASE) {
     _mgr->free(pkt);
   } else if (action == ACTION_MANUAL_HOLD) {
@@ -272,6 +284,7 @@ void Dispatcher::processRecvPacket(Packet* pkt) {
 }
 
 void Dispatcher::checkSend() {
+  unsigned long check_start = _ms->getMillis();
   if (_mgr->getOutboundCount(_ms->getMillis()) == 0) return;
   
   updateTxBudget();
@@ -336,6 +349,7 @@ void Dispatcher::checkSend() {
         return;
       }
       outbound_expiry = futureMillis(max_airtime);
+      noteDispatchTiming(4, _ms->getMillis() - check_start);
 
     #if MESH_PACKET_LOGGING
       Serial.print(getLogDateTime());

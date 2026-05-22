@@ -165,14 +165,34 @@ class MyMesh : public mesh::Mesh, public CommonCLICallbacks {
   uint32_t observer_prev_health_rx;
   uint32_t observer_prev_health_free_heap;
   uint32_t observer_prev_health_min_heap;
+  uint16_t observer_prev_health_batt_mv;
+  uint32_t observer_prev_health_boot_count;
+  uint32_t observer_prev_health_reset_reason;
+  uint32_t observer_prev_health_last_irq;
+  uint16_t observer_prev_health_max_recv_ms;
+  uint16_t observer_prev_health_max_decode_ms;
+  uint16_t observer_prev_health_max_forward_ms;
+  uint16_t observer_prev_health_max_display_ms;
+  uint16_t observer_prev_health_max_cli_ms;
+  uint16_t observer_prev_health_max_flood_ms;
   uint8_t observer_health_screen;
+  uint8_t observer_health_phase;
+  uint8_t observer_health_marker;
   uint8_t observer_prev_health_screen;
+  uint8_t observer_prev_health_phase;
+  uint8_t observer_prev_health_marker;
   uint8_t observer_prev_health_web_state;
   uint8_t observer_prev_health_web_active;
   uint8_t observer_prev_health_web_rejects;
   uint8_t observer_prev_health_web_last;
   uint16_t observer_prev_health_web_last_age_s;
   bool observer_prev_health_valid;
+  uint32_t observer_max_decode_ms;
+  uint32_t observer_max_forward_ms;
+  uint32_t observer_max_display_ms;
+  uint32_t observer_max_cli_ms;
+  uint32_t observer_max_flood_ms;
+  bool observer_boot_health_started;
   mesh::MainBoard* _board;
   ObserverPathInfo observer_paths[OBSERVER_PATH_HISTORY_SIZE];
   ObserverLastHopInfo observer_last_hops[OBSERVER_LAST_HOP_HISTORY_SIZE];
@@ -252,6 +272,7 @@ protected:
   void logRx(mesh::Packet* pkt, int len, float score) override;
   void logTx(mesh::Packet* pkt, int len) override;
   void logTxFail(mesh::Packet* pkt, int len) override;
+  void noteDispatchTiming(uint8_t marker, uint32_t duration_ms) override;
   int calcRxDelay(float score, uint32_t air_time) const override;
 
   uint32_t getRetransmitDelay(const mesh::Packet* packet) override;
@@ -334,7 +355,11 @@ public:
   float getObserverLastSnr() const { return _radio ? _radio->getLastSNR() : 0.0f; }
   void getObserverDiagLine(char* dest, size_t dest_size) const;
   void getObserverHealthLine(char* dest, size_t dest_size) const;
+  void beginObserverHealthBoot();
   void setObserverHealthScreen(uint8_t screen);
+  void setObserverHealthPhase(uint8_t phase);
+  void setObserverHealthMarker(uint8_t marker);
+  void noteObserverTiming(uint8_t marker, uint32_t duration_ms);
   bool getObserverPathLine(uint8_t index, char* dest, size_t dest_size) const;
   bool getObserverLatestPathLine(char* dest, size_t dest_size) const;
   bool getObserverLastHopLine(uint8_t index, char* dest, size_t dest_size) const;

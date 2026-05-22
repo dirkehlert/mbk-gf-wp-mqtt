@@ -76,6 +76,9 @@ public:
 
   virtual float getLastRSSI() const { return 0; }
   virtual float getLastSNR() const { return 0; }
+  virtual uint32_t getIrqCount() const { return 0; }
+  virtual uint32_t getLastIrqMicros() const { return 0; }
+  virtual uint32_t getMaxRecvRawMillis() const { return 0; }
 };
 
 /**
@@ -160,6 +163,7 @@ protected:
   virtual void logTx(Packet* packet, int len) { }
   virtual void logTxFail(Packet* packet, int len) { }
   virtual const char* getLogDateTime() { return ""; }
+  virtual void noteDispatchTiming(uint8_t marker, uint32_t duration_ms) { }
 
   virtual float getAirtimeBudgetFactor() const;
   virtual int calcRxDelay(float score, uint32_t air_time) const;

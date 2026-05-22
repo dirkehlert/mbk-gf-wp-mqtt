@@ -14,6 +14,7 @@ public:
     virtual long getLongitude() = 0;
     virtual long getAltitude() = 0;
     virtual long satellitesCount() = 0;
+    virtual long getHDOP() { return -1; }
     virtual bool isValid() = 0;
     virtual long getTimestamp() = 0;
     virtual void sendSentence(const char * sentence);
