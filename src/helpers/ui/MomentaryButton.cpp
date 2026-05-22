@@ -51,6 +51,15 @@ void MomentaryButton::cancelClick() {
   _pending_click = false;
 }
 
+void MomentaryButton::setMultiClickEnabled(bool enabled) {
+  int new_window = enabled ? MULTI_CLICK_WINDOW_MS : 0;
+  if (_multi_click_window == new_window) return;
+  _multi_click_window = new_window;
+  _click_count = 0;
+  _last_click_time = 0;
+  _pending_click = false;
+}
+
 bool MomentaryButton::isPressed(int level) const {
   if (_threshold > 0) {
     return level;

@@ -433,6 +433,9 @@ Danach die Werte in `platformio.local.ini` anpassen. Diese Datei ist in
 
 Zusaetzlich zum WP wird ein ThinkNode M1 als BLE-Companion-Radio gepflegt. Er
 basiert auf dem Companion-Radio-Build, nicht auf dem Simple-Repeater-Build.
+Der Build meldet sich intern als `Fieldtest by Moorbock 1.0 based on v1.15.0`;
+im MeshCore-Client wird wegen des 20-Byte-Feldes kurz `Moorbock FT1 v1.15`
+angezeigt.
 
 Build- und Upload-Environment:
 
@@ -459,6 +462,7 @@ Screens:
 - Send-Screen fuer vordefinierte Nachrichten an Kanaele oder gehoerte Nodes
 - Heatstrip statt alter Path-Seite
 - Heard Repeaters
+- Scopes mit aktiver Region-/Scope-Discovery und RX-Zaehlern
 - Load-Screen statt Histogramm
 
 Send-Screen:
@@ -473,13 +477,25 @@ Send-Screen:
 - Die letzte dynamische Nachricht sendet die aktuelle GPS-Position als
   `Meine Position ist: <lat>, <lon>`, sofern ein gueltiger Fix vorliegt
 
+Scope-Screen:
+
+- Doppelclick startet eine aktive Discovery wie `Discover Regions` im
+  MeshCore-Client
+- Der M1 sendet zunaechst ein Node-Discover-Control-Paket und fragt gefundene
+  Repeater danach direkt nach ihren Region-/Scope-Namen
+- Die Liste zeigt `ScopeName (RX-Zaehler)`; reine Discovery-Treffer
+  ueberschreiben keine Scopes, fuer die bereits RX-Pakete gezaehlt wurden
+- Header-Diagnose: `D` = Discovery-Responses, `Q` = gesendete Region-Queries,
+  `R` = Region-Responses mit Namen, `E` = leere Region-Responses
+
 Message-Reply:
 
 - Eingehende direkte Nachrichten koennen direkt an den Absender beantwortet
   werden
 - Kanalnachrichten werden auf demselben Kanal beantwortet und erwaehnen den
   erkannten Absender mit `@Name`, sofern der Ursprung im Text erkennbar ist
-- Die Message-Ansicht zeigt den Receive-Pfad als `direct` oder Hopcount an
+- Die Message-Ansicht zeigt den Receive-Pfad als `direct` oder Hopcount und den
+  erkannten Scope an
 - Nach erfolgreichem Reply wird die urspruengliche Nachricht vom Geraet
   entfernt, ausser sie ist gepinnt
 - Gepinnte Nachrichten bleiben sichtbar und koennen per Button 2 wieder

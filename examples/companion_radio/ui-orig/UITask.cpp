@@ -45,14 +45,14 @@ void UITask::begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* no
 
   // strip off dash and commit hash by changing dash to null terminator
   // e.g: v1.2.3-abcdef -> v1.2.3
-  char *version = strdup(FIRMWARE_VERSION);
+  char *version = strdup(DISPLAY_FIRMWARE_VERSION);
   char *dash = strchr(version, '-');
   if (dash) {
     *dash = 0;
   }
 
   // v1.2.3 (1 Jan 2025)
-  sprintf(_version_info, "%s (%s)", version, FIRMWARE_BUILD_DATE);
+  snprintf(_version_info, sizeof(_version_info), "%s (%s)", version, FIRMWARE_BUILD_DATE);
 
 #ifdef PIN_BUZZER
   buzzer.begin();
@@ -126,7 +126,7 @@ void UITask::clearMsgPreview() {
   _need_refresh = true;
 }
 
-void UITask::newMsg(uint8_t path_len, const char* from_name, const uint8_t*, uint8_t, const char*,
+void UITask::newMsg(uint8_t path_len, const char* from_name, const uint8_t*, uint8_t, const char*, const char*,
                     const char* text, int msgcount) {
   _msgcount = msgcount;
 

@@ -28,6 +28,7 @@ public:
   void begin();
   int check(bool repeat_click=false);  // returns one of BUTTON_EVENT_*
   void cancelClick();  // suppress next BUTTON_EVENT_CLICK (if already in DOWN state)
+  void setMultiClickEnabled(bool enabled);
   uint8_t getPin() { return _pin; }
   bool isPressed() const;
 };

@@ -107,6 +107,9 @@
 
 #define PUBLIC_GROUP_PSK                "izOH6cXN6mrJ5e26oRXNcg=="
 #define QUICK_MESSAGES_FILE             "/quickmsg"
+#define ANON_REQ_TYPE_REGIONS           0x01
+#define CTL_TYPE_NODE_DISCOVER_REQ      0x80
+#define CTL_TYPE_NODE_DISCOVER_RESP     0x90
 
 // these are _pushed_ to client app at any time
 #define PUSH_CODE_ADVERT                0x80
@@ -466,6 +469,7 @@ void MyMesh::logRx(mesh::Packet* packet, int len, float score) {
   uint32_t airtime_bin = (uint32_t)monitor_airtime_bins[monitor_activity_index] + airtime_ms;
   monitor_airtime_bins[monitor_activity_index] = airtime_bin > UINT16_MAX ? UINT16_MAX : (uint16_t)airtime_bin;
   monitor_last_snr_x4 = (int8_t)(packet->getSNR() * 4);
+  notePacketScope(packet);
   rememberMonitorPath(packet);
   rememberMonitorLastHop(packet, monitor_last_snr_x4);
 }
@@ -695,6 +699,16 @@ void MyMesh::onContactsFull() {
   }
 }
 
+static uint8_t reverseMonitorPath(uint8_t* dest, const uint8_t* src, uint8_t path_len) {
+  if (!dest || !src || !mesh::Packet::isValidPathLen(path_len)) return OUT_PATH_UNKNOWN;
+  uint8_t hash_size = (path_len >> 6) + 1;
+  uint8_t hash_count = path_len & 63;
+  for (uint8_t i = 0; i < hash_count; i++) {
+    memcpy(&dest[i * hash_size], &src[(hash_count - 1 - i) * hash_size], hash_size);
+  }
+  return path_len;
+}
+
 void MyMesh::onDiscoveredContact(ContactInfo &contact, bool is_new, uint8_t path_len, const uint8_t* path) {
   if (_serial->isConnected()) {
     if (is_new) {
@@ -712,6 +726,12 @@ void MyMesh::onDiscoveredContact(ContactInfo &contact, bool is_new, uint8_t path
 
   // add inbound-path to mem cache
   if (path && mesh::Packet::isValidPathLen(path_len)) {  // check path is valid
+    rememberScopeTarget(contact, path_len, path);
+
+    if (contact.type == ADV_TYPE_REPEATER) {
+      contact.out_path_len = reverseMonitorPath(contact.out_path, path, path_len);
+    }
+
     AdvertPath* p = advert_paths;
     uint32_t oldest = 0xFFFFFFFF;
     for (int i = 0; i < ADVERT_PATH_TABLE_SIZE; i++) {   // check if already in table, otherwise evict oldest
@@ -736,6 +756,15 @@ void MyMesh::onDiscoveredContact(ContactInfo &contact, bool is_new, uint8_t path
 
 static int sort_by_recent(const void *a, const void *b) {
   return ((AdvertPath *) b)->recv_timestamp - ((AdvertPath *) a)->recv_timestamp;
+}
+
+static int sort_scope_by_recent(const void *a, const void *b) {
+  const ScopeInfo* sa = (const ScopeInfo *) a;
+  const ScopeInfo* sb = (const ScopeInfo *) b;
+  const bool a_rx = sa->rx_count > 0;
+  const bool b_rx = sb->rx_count > 0;
+  if (a_rx != b_rx) return b_rx ? 1 : -1;
+  return sb->seen_timestamp - sa->seen_timestamp;
 }
 
 int MyMesh::getRecentlyHeard(AdvertPath dest[], int max_num) {
@@ -892,6 +921,149 @@ bool MyMesh::sendQuickChannelReply(uint8_t channel_idx, const char* mention, con
 #endif
 }
 
+uint8_t MyMesh::queryNearbyScopes() {
+  uint8_t sent = 0;
+  const uint8_t max_pending = (uint8_t)(sizeof(pending_scope_req) / sizeof(pending_scope_req[0]));
+  memset(pending_scope_req, 0, sizeof(pending_scope_req));
+  last_scope_scan_sent = 0;
+  sendScopeDiscoverReq();
+
+  AdvertPath recent[ADVERT_PATH_TABLE_SIZE];
+  int recent_count = getRecentlyHeard(recent, ADVERT_PATH_TABLE_SIZE);
+  uint8_t request[2];
+  request[0] = ANON_REQ_TYPE_REGIONS;
+  request[1] = 0; // reply path: zero-hop back to us; intended for nearby repeaters
+
+  for (uint8_t i = 0; i < SCOPE_TARGET_SIZE && sent < max_pending; i++) {
+    if (scope_targets[i].seen_timestamp == 0) continue;
+    ContactInfo target;
+    memset(&target, 0, sizeof(target));
+    target.id = scope_targets[i].id;
+    StrHelper::strncpy(target.name, scope_targets[i].name, sizeof(target.name));
+    target.type = ADV_TYPE_REPEATER;
+    target.out_path_len = mesh::Packet::copyPath(target.out_path, scope_targets[i].path, scope_targets[i].path_len);
+    target.shared_secret_valid = false;
+    sendScopeRequest(target, request, sizeof(request), sent);
+  }
+
+  for (uint32_t i = 0; i < getNumContacts() && sent < max_pending; i++) {
+    ContactInfo contact;
+    if (!getContactByIdx(i, contact) || contact.type != ADV_TYPE_REPEATER) continue;
+    if (contact.out_path_len == OUT_PATH_UNKNOWN) continue;
+
+    bool duplicate = false;
+    for (int r = 0; r < recent_count; r++) {
+      if (recent[r].recv_timestamp == 0) continue;
+      if (memcmp(recent[r].pubkey_prefix, contact.id.pub_key, sizeof(recent[r].pubkey_prefix)) == 0) {
+        duplicate = true;
+        break;
+      }
+    }
+    if (duplicate) continue;
+
+    sendScopeRequest(contact, request, sizeof(request), sent);
+  }
+  last_scope_scan_sent = sent;
+  return sent;
+}
+
+void MyMesh::sendScopeDiscoverReq() {
+  uint8_t data[10];
+  data[0] = CTL_TYPE_NODE_DISCOVER_REQ; // full pubkey response
+  data[1] = (1 << ADV_TYPE_REPEATER);
+  getRNG()->random(&data[2], 4);
+  memcpy(&pending_scope_discover_tag, &data[2], 4);
+  uint32_t since = 0;
+  memcpy(&data[6], &since, 4);
+
+  mesh::Packet* pkt = createControlData(data, sizeof(data));
+  if (pkt) {
+    sendZeroHop(pkt);
+  }
+}
+
+bool MyMesh::sendScopeRequest(ContactInfo& recipient, const uint8_t* request, size_t request_len, uint8_t& sent) {
+  if (!request || request_len == 0 || sent >= (uint8_t)(sizeof(pending_scope_req) / sizeof(pending_scope_req[0]))) return false;
+  ContactInfo* stored = ensureScopeContact(recipient);
+  if (!stored) return false;
+  if (recipient.out_path_len != OUT_PATH_UNKNOWN) {
+    stored->out_path_len = mesh::Packet::copyPath(stored->out_path, recipient.out_path, recipient.out_path_len);
+  }
+  uint32_t tag = 0;
+  uint32_t est_timeout = 0;
+  int result = sendAnonReq(*stored, request, (uint8_t)request_len, tag, est_timeout);
+  if (result == MSG_SEND_FAILED) return false;
+  pending_scope_req[sent++] = tag;
+  return true;
+}
+
+ContactInfo* MyMesh::ensureScopeContact(const ContactInfo& candidate) {
+  ContactInfo* stored = lookupContactByPubKey(candidate.id.pub_key, PUB_KEY_SIZE);
+  if (stored) return stored;
+
+  ContactInfo add = candidate;
+  if (add.name[0] == 0) {
+    snprintf(add.name, sizeof(add.name), "%02X%02X%02X%02X",
+             add.id.pub_key[0], add.id.pub_key[1], add.id.pub_key[2], add.id.pub_key[3]);
+  }
+  add.type = ADV_TYPE_REPEATER;
+  add.flags = 0;
+  add.lastmod = getRTCClock()->getCurrentTime();
+  add.last_advert_timestamp = add.lastmod;
+  add.shared_secret_valid = false;
+  if (!addContact(add)) return nullptr;
+  return lookupContactByPubKey(candidate.id.pub_key, PUB_KEY_SIZE);
+}
+
+uint8_t MyMesh::getScopeInfo(ScopeInfo dest[], uint8_t max_count) const {
+  if (!dest || max_count == 0) return 0;
+
+  ScopeInfo sorted[SCOPE_CACHE_SIZE];
+  memcpy(sorted, scope_cache, sizeof(sorted));
+  qsort(sorted, SCOPE_CACHE_SIZE, sizeof(sorted[0]), sort_scope_by_recent);
+
+  uint8_t count = 0;
+  for (uint8_t i = 0; i < SCOPE_CACHE_SIZE && count < max_count; i++) {
+    if (sorted[i].name[0] == 0 || sorted[i].seen_timestamp == 0) continue;
+    dest[count++] = sorted[i];
+  }
+  return count;
+}
+
+void MyMesh::formatPacketScope(const mesh::Packet* packet, char* dest, size_t dest_size) const {
+  if (!dest || dest_size == 0) return;
+  dest[0] = 0;
+  if (!packet || !packet->hasTransportCodes()) {
+    StrHelper::strncpy(dest, "none", dest_size);
+    return;
+  }
+
+  TransportKey key;
+  memcpy(key.key, _prefs.default_scope_key, sizeof(key.key));
+  if (!key.isNull() && packet->transport_codes[0] == key.calcTransportCode(packet)) {
+    if (_prefs.default_scope_name[0]) {
+      snprintf(dest, dest_size, "%s", _prefs.default_scope_name);
+    } else {
+      snprintf(dest, dest_size, "default");
+    }
+    return;
+  }
+
+  TransportKeyStore temp;
+  for (uint8_t i = 0; i < SCOPE_CACHE_SIZE; i++) {
+    if (scope_cache[i].name[0] == 0) continue;
+    char auto_name[SCOPE_NAME_SIZE + 1];
+    snprintf(auto_name, sizeof(auto_name), "#%s", scope_cache[i].name);
+    temp.getAutoKeyFor(i + 1, auto_name, key);
+    if (packet->transport_codes[0] == key.calcTransportCode(packet)) {
+      snprintf(dest, dest_size, "%s", scope_cache[i].name);
+      return;
+    }
+  }
+
+  snprintf(dest, dest_size, "0x%04X", (unsigned int)packet->transport_codes[0]);
+}
+
 bool MyMesh::isMonitorHeatstripRequest(const char* text) const {
   if (!text) return false;
   while (*text == ' ' || *text == '\t') text++;
@@ -976,6 +1148,131 @@ bool MyMesh::sendMonitorHeatstripReply(const ContactInfo& recipient) {
   uint32_t expected_ack = 0;
   uint32_t est_timeout = 0;
   return sendMessage(recipient, getRTCClock()->getCurrentTimeUnique(), 0, reply, expected_ack, est_timeout) != MSG_SEND_FAILED;
+}
+
+void MyMesh::rememberScopeName(const char* name, const char* source) {
+  if (!name || !name[0] || strcmp(name, "*") == 0) return;
+  while (*name == ' ' || *name == '#') name++;
+  if (!name[0]) return;
+
+  char clean[SCOPE_NAME_SIZE];
+  size_t len = 0;
+  while (name[len] && name[len] != ',' && name[len] != '\n' && name[len] != '\r' && len + 1 < sizeof(clean)) {
+    clean[len] = name[len];
+    len++;
+  }
+  while (len > 0 && clean[len - 1] == ' ') len--;
+  clean[len] = 0;
+  if (!clean[0] || strcmp(clean, "*") == 0) return;
+
+  ScopeInfo* slot = nullptr;
+  ScopeInfo* empty = nullptr;
+  ScopeInfo* oldest_zero_rx = nullptr;
+  uint32_t oldest_zero_rx_seen = 0xFFFFFFFF;
+  for (uint8_t i = 0; i < SCOPE_CACHE_SIZE; i++) {
+    if (strcmp(scope_cache[i].name, clean) == 0) {
+      slot = &scope_cache[i];
+      break;
+    }
+    if (scope_cache[i].name[0] == 0 && !empty) {
+      empty = &scope_cache[i];
+    } else if (scope_cache[i].rx_count == 0 && scope_cache[i].seen_timestamp < oldest_zero_rx_seen) {
+      oldest_zero_rx_seen = scope_cache[i].seen_timestamp;
+      oldest_zero_rx = &scope_cache[i];
+    }
+  }
+  if (!slot) slot = empty ? empty : oldest_zero_rx;
+  if (!slot) return;
+
+  if (slot->name[0] == 0 || strcmp(slot->name, clean) != 0) {
+    memset(slot, 0, sizeof(*slot));
+  }
+  StrHelper::strncpy(slot->name, clean, sizeof(slot->name));
+  StrHelper::strncpy(slot->source, source && source[0] ? source : "repeater", sizeof(slot->source));
+  slot->seen_timestamp = getRTCClock()->getCurrentTime();
+}
+
+void MyMesh::noteScopeRx(const char* name, const char* source) {
+  if (!name || !name[0]) return;
+
+  ScopeInfo* slot = nullptr;
+  uint32_t oldest = 0xFFFFFFFF;
+  for (uint8_t i = 0; i < SCOPE_CACHE_SIZE; i++) {
+    if (strcmp(scope_cache[i].name, name) == 0) {
+      slot = &scope_cache[i];
+      break;
+    }
+    if (scope_cache[i].seen_timestamp < oldest) {
+      oldest = scope_cache[i].seen_timestamp;
+      slot = &scope_cache[i];
+    }
+  }
+  if (!slot) return;
+
+  if (slot->name[0] == 0 || strcmp(slot->name, name) != 0) {
+    memset(slot, 0, sizeof(*slot));
+    StrHelper::strncpy(slot->name, name, sizeof(slot->name));
+    StrHelper::strncpy(slot->source, source && source[0] ? source : "rx", sizeof(slot->source));
+  } else if (source && source[0] && strcmp(slot->source, "rx") == 0) {
+    StrHelper::strncpy(slot->source, source, sizeof(slot->source));
+  }
+  slot->seen_timestamp = getRTCClock()->getCurrentTime();
+  if (slot->rx_count < UINT32_MAX) slot->rx_count++;
+}
+
+void MyMesh::notePacketScope(const mesh::Packet* packet) {
+  char scope[32];
+  formatPacketScope(packet, scope, sizeof(scope));
+  noteScopeRx(scope, strcmp(scope, "none") == 0 ? "rx" : "scope");
+}
+
+void MyMesh::rememberScopeTarget(const ContactInfo& contact, uint8_t path_len, const uint8_t* path) {
+  if (contact.type != ADV_TYPE_REPEATER || !path || !mesh::Packet::isValidPathLen(path_len)) return;
+
+  ScopeTarget* slot = nullptr;
+  uint32_t oldest = 0xFFFFFFFF;
+  for (uint8_t i = 0; i < SCOPE_TARGET_SIZE; i++) {
+    if (scope_targets[i].seen_timestamp > 0 && contact.id.matches(scope_targets[i].id)) {
+      slot = &scope_targets[i];
+      break;
+    }
+    if (scope_targets[i].seen_timestamp < oldest) {
+      oldest = scope_targets[i].seen_timestamp;
+      slot = &scope_targets[i];
+    }
+  }
+  if (!slot) return;
+
+  slot->id = contact.id;
+  StrHelper::strncpy(slot->name, contact.name, sizeof(slot->name));
+  slot->path_len = reverseMonitorPath(slot->path, path, path_len);
+  slot->seen_timestamp = getRTCClock()->getCurrentTime();
+}
+
+void MyMesh::ingestScopeNames(const ContactInfo& contact, const char* names) {
+  if (!names || !names[0]) return;
+
+  char work[120];
+  StrHelper::strncpy(work, names, sizeof(work));
+  char* cursor = work;
+  while (*cursor) {
+    while (*cursor == ',' || *cursor == ' ' || *cursor == '\n' || *cursor == '\r') cursor++;
+    if (!*cursor) break;
+    char* start = cursor;
+    while (*cursor && *cursor != ',') cursor++;
+    if (*cursor) *cursor++ = 0;
+    rememberScopeName(start, contact.name);
+  }
+}
+
+bool MyMesh::isPendingScopeTag(uint32_t tag) {
+  for (uint8_t i = 0; i < (uint8_t)(sizeof(pending_scope_req) / sizeof(pending_scope_req[0])); i++) {
+    if (pending_scope_req[i] == tag) {
+      pending_scope_req[i] = 0;
+      return true;
+    }
+  }
+  return false;
 }
 
 static bool readTextLine(File& file, char* dest, size_t dest_size) {
@@ -1117,7 +1414,9 @@ void MyMesh::queueMessage(const ContactInfo &from, uint8_t txt_type, mesh::Packe
                         isDisplayableText(text);
   if (should_display && _ui) {
     uint8_t display_path_len = path_len == 0xFF ? 0xFF : pkt->getPathHashCount();
-    _ui->newMsg(display_path_len, from.name, from.id.pub_key, 0xFF, nullptr, text, offline_queue_len);
+    char scope[32];
+    formatPacketScope(pkt, scope, sizeof(scope));
+    _ui->newMsg(display_path_len, from.name, from.id.pub_key, 0xFF, nullptr, scope, text, offline_queue_len);
     if (!_serial->isConnected()) {
       _ui->notify(UIEventType::contactMessage);
     }
@@ -1236,6 +1535,8 @@ void MyMesh::onChannelMessageRecv(const mesh::GroupChannel &channel, mesh::Packe
   }
   if (_ui && isDisplayableText(text)) {
     uint8_t display_path_len = path_len == 0xFF ? 0xFF : pkt->getPathHashCount();
+    char scope[32];
+    formatPacketScope(pkt, scope, sizeof(scope));
     char mention[32] = "";
     const char* colon = strchr(text, ':');
     if (colon && colon > text) {
@@ -1245,7 +1546,7 @@ void MyMesh::onChannelMessageRecv(const mesh::GroupChannel &channel, mesh::Packe
       memcpy(mention, text, len);
       mention[len] = 0;
     }
-    _ui->newMsg(display_path_len, channel_name, nullptr, channel_idx, mention, text, offline_queue_len);
+    _ui->newMsg(display_path_len, channel_name, nullptr, channel_idx, mention, scope, text, offline_queue_len);
   }
 #endif
 }
@@ -1389,6 +1690,18 @@ void MyMesh::onContactResponse(const ContactInfo &contact, const uint8_t *data, 
     memcpy(&out_frame[i], &data[4], len - 4);
     i += (len - 4);
     _serial->writeFrame(out_frame, i);
+  } else if (len >= 8 && isPendingScopeTag(tag)) {
+    if (scope_response_count < UINT8_MAX) scope_response_count++;
+    if (len == 8) {
+      if (scope_empty_response_count < UINT8_MAX) scope_empty_response_count++;
+    } else {
+      char names[120];
+      size_t names_len = len - 8;
+      if (names_len >= sizeof(names)) names_len = sizeof(names) - 1;
+      memcpy(names, &data[8], names_len);
+      names[names_len] = 0;
+      ingestScopeNames(contact, names);
+    }
   } else if (len > 4 && tag == pending_req) {  // check for matching response tag
     pending_req = 0;
 
@@ -1435,6 +1748,32 @@ bool MyMesh::onContactPathRecv(ContactInfo& contact, uint8_t* in_path, uint8_t i
 }
 
 void MyMesh::onControlDataRecv(mesh::Packet *packet) {
+  uint8_t type = packet->payload_len > 0 ? (packet->payload[0] & 0xF0) : 0;
+  if (type == CTL_TYPE_NODE_DISCOVER_RESP && packet->payload_len >= 6 + PUB_KEY_SIZE) {
+    uint8_t node_type = packet->payload[0] & 0x0F;
+    uint32_t tag;
+    memcpy(&tag, &packet->payload[2], 4);
+    if (node_type == ADV_TYPE_REPEATER && pending_scope_discover_tag != 0 && tag == pending_scope_discover_tag) {
+      if (scope_discover_response_count < UINT8_MAX) scope_discover_response_count++;
+      ContactInfo target;
+      memset(&target, 0, sizeof(target));
+      memcpy(target.id.pub_key, &packet->payload[6], PUB_KEY_SIZE);
+      snprintf(target.name, sizeof(target.name), "%02X%02X%02X%02X",
+               target.id.pub_key[0], target.id.pub_key[1], target.id.pub_key[2], target.id.pub_key[3]);
+      target.type = ADV_TYPE_REPEATER;
+      target.out_path_len = 0; // zero-hop response means this repeater is directly reachable
+      target.shared_secret_valid = false;
+
+      uint8_t request[2];
+      request[0] = ANON_REQ_TYPE_REGIONS;
+      request[1] = 0;
+      uint8_t sent = last_scope_scan_sent;
+      if (sendScopeRequest(target, request, sizeof(request), sent)) {
+        last_scope_scan_sent = sent;
+      }
+    }
+  }
+
   if (packet->payload_len + 4 > sizeof(out_frame)) {
     MESH_DEBUG_PRINTLN("onControlDataRecv(), payload_len too long: %d", packet->payload_len);
     return;
@@ -1524,6 +1863,8 @@ MyMesh::MyMesh(mesh::Radio &radio, mesh::RNG &rng, mesh::RTCClock &rtc, SimpleMe
   offline_queue_len = 0;
   app_target_ver = 0;
   clearPendingReqs();
+  memset(pending_scope_req, 0, sizeof(pending_scope_req));
+  pending_scope_discover_tag = 0;
   next_ack_idx = 0;
   sign_data = NULL;
   dirty_contacts_expiry = 0;
@@ -1537,6 +1878,12 @@ MyMesh::MyMesh(mesh::Radio &radio, mesh::RNG &rng, mesh::RTCClock &rtc, SimpleMe
   memset(monitor_last_hops, 0, sizeof(monitor_last_hops));
   memset(monitor_activity_bins, 0, sizeof(monitor_activity_bins));
   memset(monitor_airtime_bins, 0, sizeof(monitor_airtime_bins));
+  memset(scope_cache, 0, sizeof(scope_cache));
+  memset(scope_targets, 0, sizeof(scope_targets));
+  last_scope_scan_sent = 0;
+  scope_response_count = 0;
+  scope_discover_response_count = 0;
+  scope_empty_response_count = 0;
   resetQuickMessages();
 
   // defaults
@@ -1690,7 +2037,7 @@ void MyMesh::handleCmdFrame(size_t len) {
     i += 12;
     StrHelper::strzcpy((char *)&out_frame[i], board.getManufacturerName(), 40);
     i += 40;
-    StrHelper::strzcpy((char *)&out_frame[i], FIRMWARE_VERSION, 20);
+    StrHelper::strzcpy((char *)&out_frame[i], CLIENT_FIRMWARE_VERSION, 20);
     i += 20;
     out_frame[i++] = _prefs.client_repeat;   // v9+
     out_frame[i++] = _prefs.path_hash_mode;  // v10+

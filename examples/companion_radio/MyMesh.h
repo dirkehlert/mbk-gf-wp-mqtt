@@ -11,8 +11,20 @@
 #define FIRMWARE_BUILD_DATE "19 Apr 2026"
 #endif
 
+#ifndef STOCK_FIRMWARE_VERSION
+#define STOCK_FIRMWARE_VERSION "v1.15.0"
+#endif
+
 #ifndef FIRMWARE_VERSION
-#define FIRMWARE_VERSION "v1.15.0"
+#define FIRMWARE_VERSION "Fieldtest by Moorbock 1.0 based on " STOCK_FIRMWARE_VERSION
+#endif
+
+#ifndef CLIENT_FIRMWARE_VERSION
+#define CLIENT_FIRMWARE_VERSION "Moorbock FT1 v1.15"
+#endif
+
+#ifndef DISPLAY_FIRMWARE_VERSION
+#define DISPLAY_FIRMWARE_VERSION "FT 1.0"
 #endif
 
 #if defined(NRF52_PLATFORM) || defined(STM32_PLATFORM)
@@ -120,6 +132,26 @@ struct MonitorLastHopInfo {
   char key[MONITOR_LAST_HOP_TEXT_SIZE];
 };
 
+#define SCOPE_CACHE_SIZE                24
+#define SCOPE_NAME_SIZE                 31
+#define SCOPE_SOURCE_SIZE               24
+#define SCOPE_TARGET_SIZE               8
+
+struct ScopeInfo {
+  char name[SCOPE_NAME_SIZE];
+  char source[SCOPE_SOURCE_SIZE];
+  uint32_t seen_timestamp;
+  uint32_t rx_count;
+};
+
+struct ScopeTarget {
+  mesh::Identity id;
+  char name[32];
+  uint8_t path_len;
+  uint8_t path[MAX_PATH_SIZE];
+  uint32_t seen_timestamp;
+};
+
 class MyMesh : public BaseChatMesh, public DataStoreHost {
 public:
   MyMesh(mesh::Radio &radio, mesh::RNG &rng, mesh::RTCClock &rtc, SimpleMeshTables &tables, DataStore& store, AbstractUITask* ui=NULL);
@@ -152,6 +184,13 @@ public:
   bool getMonitorLastHopLine(uint8_t index, char* dest, size_t dest_size) const;
   uint8_t getMonitorActivity(uint16_t* dest, uint8_t max_count);
   uint8_t getMonitorAirtime(uint16_t* dest, uint8_t max_count);
+  uint8_t queryNearbyScopes();
+  uint8_t getScopeInfo(ScopeInfo dest[], uint8_t max_count) const;
+  void formatPacketScope(const mesh::Packet* packet, char* dest, size_t dest_size) const;
+  uint8_t getLastScopeScanSent() const { return last_scope_scan_sent; }
+  uint8_t getScopeResponseCount() const { return scope_response_count; }
+  uint8_t getScopeDiscoverResponseCount() const { return scope_discover_response_count; }
+  uint8_t getScopeEmptyResponseCount() const { return scope_empty_response_count; }
 
 protected:
   float getAirtimeBudgetFactor() const override;
@@ -255,6 +294,15 @@ private:
   bool isDisplayableText(const char* text) const;
   void formatMonitorHeatstripReply(char* dest, size_t dest_size) const;
   bool sendMonitorHeatstripReply(const ContactInfo& recipient);
+  void rememberScopeName(const char* name, const char* source);
+  void ingestScopeNames(const ContactInfo& contact, const char* names);
+  bool isPendingScopeTag(uint32_t tag);
+  void noteScopeRx(const char* name, const char* source);
+  void notePacketScope(const mesh::Packet* packet);
+  void rememberScopeTarget(const ContactInfo& contact, uint8_t path_len, const uint8_t* path);
+  bool sendScopeRequest(ContactInfo& recipient, const uint8_t* request, size_t request_len, uint8_t& sent);
+  ContactInfo* ensureScopeContact(const ContactInfo& candidate);
+  void sendScopeDiscoverReq();
   void monitorRollActivity();
   void rememberMonitorPath(const mesh::Packet* packet);
   void rememberMonitorLastHop(const mesh::Packet* packet, int8_t snr_x4);
@@ -269,6 +317,8 @@ private:
   uint32_t pending_status;
   uint32_t pending_telemetry, pending_discovery;   // pending _TELEMETRY_REQ
   uint32_t pending_req;   // pending _BINARY_REQ
+  uint32_t pending_scope_req[8];
+  uint32_t pending_scope_discover_tag;
   BaseSerialInterface *_serial;
   AbstractUITask* _ui;
 
@@ -322,6 +372,12 @@ private:
   uint16_t monitor_airtime_bins[MONITOR_ACTIVITY_BINS];
   uint8_t monitor_activity_index;
   unsigned long monitor_next_activity_rollover;
+  ScopeInfo scope_cache[SCOPE_CACHE_SIZE];
+  ScopeTarget scope_targets[SCOPE_TARGET_SIZE];
+  uint8_t last_scope_scan_sent;
+  uint8_t scope_response_count;
+  uint8_t scope_discover_response_count;
+  uint8_t scope_empty_response_count;
 };
 
 extern MyMesh the_mesh;

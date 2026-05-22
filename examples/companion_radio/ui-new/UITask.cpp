@@ -40,7 +40,7 @@ public:
   SplashScreen(UITask* task) : _task(task) {
     // strip off dash and commit hash by changing dash to null terminator
     // e.g: v1.2.3-abcdef -> v1.2.3
-    const char *ver = FIRMWARE_VERSION;
+    const char *ver = DISPLAY_FIRMWARE_VERSION;
     const char *dash = strchr(ver, '-');
 
     int len = dash ? dash - ver : strlen(ver);
@@ -128,6 +128,7 @@ class HomeScreen : public UIScreen {
     RADIO,
     HEATSTRIP,
     HEARDS,
+    SCOPES,
     LOAD,
     BLUETOOTH,
     ADVERT,
@@ -148,6 +149,7 @@ class HomeScreen : public UIScreen {
   uint8_t _page;
   bool _shutdown_init;
   AdvertPath recent[UI_RECENT_LIST_SIZE];
+  ScopeInfo scopes[UI_RECENT_LIST_SIZE];
 
   static const uint8_t HEAT_ROWS = 6;
   static const uint8_t HEAT_PATHS = 8;
@@ -615,6 +617,32 @@ public:
         }
       }
       if (!any) display.drawTextEllipsized(0, 36, display.width(), "No RX hops");
+    } else if (_page == HomePage::SCOPES) {
+      uint8_t count = the_mesh.getScopeInfo(scopes, UI_RECENT_LIST_SIZE);
+      display.setColor(DisplayDriver::GREEN);
+      display.setTextSize(1);
+      display.setCursor(0, 20);
+      char header[40];
+      snprintf(header, sizeof(header), "Scopes D:%u Q:%u R:%u E:%u",
+               (unsigned int)the_mesh.getScopeDiscoverResponseCount(),
+               (unsigned int)the_mesh.getLastScopeScanSent(),
+               (unsigned int)the_mesh.getScopeResponseCount(),
+               (unsigned int)the_mesh.getScopeEmptyResponseCount());
+      display.drawTextEllipsized(0, 20, display.width(), header);
+      display.setColor(DisplayDriver::LIGHT);
+      if (count == 0) {
+        display.drawTextEllipsized(0, 36, display.width(), "Doubleclick to scan");
+      } else {
+        int y = 34;
+        for (uint8_t i = 0; i < count; i++, y += 13) {
+          char line[64];
+          char filtered_name[sizeof(scopes[i].name)];
+          display.translateUTF8ToBlocks(filtered_name, scopes[i].name, sizeof(filtered_name));
+          snprintf(line, sizeof(line), "%s (%lu)", filtered_name,
+                   (unsigned long)scopes[i].rx_count);
+          display.drawTextEllipsized(0, y, display.width(), line);
+        }
+      }
     } else if (_page == HomePage::LOAD) {
       renderLoad(display);
     } else if (_page == HomePage::BLUETOOTH) {
@@ -861,6 +889,11 @@ public:
       }
       return true;
     }
+    if (c == KEY_CONTEXT_MENU && _page == HomePage::SCOPES) {
+      uint8_t sent = the_mesh.queryNearbyScopes();
+      _task->showAlert(sent ? "Scope scan sent" : "No repeaters", 1000);
+      return true;
+    }
     if (c == KEY_ENTER && _page == HomePage::BLUETOOTH) {
       if (_task->isSerialEnabled()) {  // toggle Bluetooth on/off
         _task->disableSerial();
@@ -913,6 +946,7 @@ class MsgPreviewScreen : public UIScreen {
     bool reply_to_channel;
     bool pinned;
     char reply_mention[32];
+    char scope[32];
     char origin[62];
     char msg[78];
   };
@@ -920,6 +954,7 @@ class MsgPreviewScreen : public UIScreen {
   int num_unread;
   int head = MAX_UNREAD_MSGS - 1; // index of latest unread message
   bool reply_mode = false;
+  bool reply_confirm = false;
   uint8_t reply_idx = 0;
   MsgEntry unread[MAX_UNREAD_MSGS];
 
@@ -931,10 +966,11 @@ public:
   }
 
   void addPreview(uint8_t path_len, const char* from_name, const uint8_t* from_pubkey,
-                  uint8_t reply_channel_idx, const char* reply_mention, const char* msg) {
+                  uint8_t reply_channel_idx, const char* reply_mention, const char* scope, const char* msg) {
     head = (head + 1) % MAX_UNREAD_MSGS;
     if (num_unread < MAX_UNREAD_MSGS) num_unread++;
     reply_mode = false;
+    reply_confirm = false;
     reply_idx = 0;
 
     auto p = &unread[head];
@@ -946,6 +982,7 @@ public:
     p->can_reply = from_pubkey != nullptr || p->reply_to_channel;
     if (from_pubkey) memcpy(p->pubkey_prefix, from_pubkey, sizeof(p->pubkey_prefix));
     if (reply_mention) StrHelper::strncpy(p->reply_mention, reply_mention, sizeof(p->reply_mention));
+    if (scope) StrHelper::strncpy(p->scope, scope, sizeof(p->scope));
     if (path_len == 0xFF) {
       sprintf(p->origin, "(D) %s:", from_name);
     } else {
@@ -960,6 +997,7 @@ public:
       memset(unread, 0, sizeof(unread));
       head = MAX_UNREAD_MSGS - 1;
       reply_mode = false;
+      reply_confirm = false;
       reply_idx = 0;
       return;
     }
@@ -1007,21 +1045,23 @@ public:
     display.translateUTF8ToBlocks(filtered_origin, p->origin, sizeof(filtered_origin));
     display.print(filtered_origin);
 
-    char path_line[24];
+    char path_line[56];
+    char filtered_scope[sizeof(p->scope)];
+    display.translateUTF8ToBlocks(filtered_scope, p->scope, sizeof(filtered_scope));
     if (p->path_len == 0xFF) {
-      snprintf(path_line, sizeof(path_line), "%sPath: direct", p->pinned ? "* " : "");
+      snprintf(path_line, sizeof(path_line), "%sPath: direct S:%s", p->pinned ? "* " : "", filtered_scope);
     } else {
-      snprintf(path_line, sizeof(path_line), "%sPath: %u hops", p->pinned ? "* " : "",
-               (unsigned int)p->path_len);
+      snprintf(path_line, sizeof(path_line), "%sPath: %u hops S:%s", p->pinned ? "* " : "",
+               (unsigned int)p->path_len, filtered_scope);
     }
     display.setCursor(0, 25);
     display.setColor(DisplayDriver::GREEN);
-    display.print(path_line);
+    display.drawTextEllipsized(0, 25, display.width(), path_line);
 
     if (reply_mode) {
       display.setCursor(0, 38);
       display.setColor(DisplayDriver::LIGHT);
-      display.print("Reply:");
+      display.print(reply_confirm ? "Send?" : "Reply:");
       char reply[112];
       buildReplyText(*p, reply, sizeof(reply));
       display.setCursor(0, 50);
@@ -1050,11 +1090,23 @@ public:
     auto p = &unread[head];
     if (reply_mode && num_unread > 0) {
       uint8_t count = getReplyMessageCount();
-      if (c == KEY_NEXT || c == KEY_RIGHT || c == KEY_LEFT || c == KEY_PREV) {
+      if (c == KEY_NEXT || c == KEY_RIGHT) {
         if (count > 0) reply_idx = (reply_idx + 1) % count;
+        reply_confirm = false;
+        return true;
+      }
+      if (c == KEY_LEFT || c == KEY_PREV) {
+        reply_mode = false;
+        reply_confirm = false;
+        _task->showAlert("Canceled", 800);
         return true;
       }
       if (c == KEY_ENTER) {
+        if (!reply_confirm) {
+          reply_confirm = true;
+          _task->showAlert("Confirm send", 800);
+          return true;
+        }
         char reply[112];
         buildReplyText(*p, reply, sizeof(reply));
         bool sent_flood = false;
@@ -1068,6 +1120,7 @@ public:
         _task->notify(sent ? UIEventType::ack : UIEventType::none);
         _task->showAlert(sent ? (p->reply_to_channel ? "Reply channel" : (sent_flood ? "Reply flood" : "Reply sent")) : "Reply failed", 1000);
         reply_mode = false;
+        reply_confirm = false;
         if (sent && !p->pinned) {
           removeCurrent();
         }
@@ -1109,6 +1162,7 @@ public:
         return true;
       }
       reply_mode = true;
+      reply_confirm = false;
       reply_idx = 0;
       return true;
     }
@@ -1260,11 +1314,11 @@ void UITask::msgRead(int msgcount) {
 
 void UITask::newMsg(uint8_t path_len, const char* from_name, const uint8_t* from_pubkey,
                     uint8_t reply_channel_idx, const char* reply_mention,
-                    const char* text, int msgcount) {
+                    const char* scope, const char* text, int msgcount) {
   _msgcount = msgcount;
 
   ((MsgPreviewScreen *) msg_preview)->addPreview(path_len, from_name, from_pubkey,
-                                                 reply_channel_idx, reply_mention, text);
+                                                 reply_channel_idx, reply_mention, scope, text);
   if (curr == msg_preview) {
     setCurrScreen(msg_preview);
   }
@@ -1356,6 +1410,7 @@ bool UITask::isButtonPressed() const {
 
 void UITask::loop() {
   char c = 0;
+  bool fast_message_input = curr == msg_preview;
 #if UI_HAS_JOYSTICK
   int ev = user_btn.check();
   if (ev == BUTTON_EVENT_CLICK) {
@@ -1380,6 +1435,7 @@ void UITask::loop() {
     c = handleTripleClick(KEY_SELECT);
   }
 #elif defined(PIN_USER_BTN)
+  user_btn.setMultiClickEnabled(!fast_message_input);
   int ev = user_btn.check();
   if (ev == BUTTON_EVENT_CLICK) {
     c = checkDisplayOn(KEY_NEXT);
@@ -1391,6 +1447,7 @@ void UITask::loop() {
     c = handleTripleClick(KEY_SELECT);
   }
 #if defined(BUTTON_PIN2)
+  user_btn2.setMultiClickEnabled(!fast_message_input);
   ev = user_btn2.check();
   if (ev == BUTTON_EVENT_CLICK) {
     c = checkDisplayOn(KEY_PREV);
@@ -1433,7 +1490,7 @@ void UITask::loop() {
   if (c != 0 && curr) {
     curr->handleInput(c);
     _auto_off = millis() + AUTO_OFF_MILLIS;   // extend auto-off timer
-    _next_refresh = 100;  // trigger refresh
+    _next_refresh = 0;  // trigger refresh
   }
 
   userLedHandler();
@@ -1523,7 +1580,7 @@ char UITask::handleLongPress(char c) {
 char UITask::handleDoubleClick(char c) {
   MESH_DEBUG_PRINTLN("UITask: double click triggered");
   checkDisplayOn(c);
-  return c;
+  return KEY_CONTEXT_MENU;
 }
 
 char UITask::handleTripleClick(char c) {
