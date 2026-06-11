@@ -452,8 +452,8 @@ Danach die Werte in `platformio.local.ini` anpassen. Diese Datei ist in
 
 Zusaetzlich zum WP wird ein ThinkNode M1 als BLE-Companion-Radio gepflegt. Er
 basiert auf dem Companion-Radio-Build, nicht auf dem Simple-Repeater-Build.
-Der Build meldet sich intern als `Fieldtest by Moorbock 1.0 based on v1.15.0`;
-im MeshCore-Client wird wegen des 20-Byte-Feldes kurz `Moorbock FT1 v1.15`
+Der Build meldet sich intern als `Fieldtest by Moorbock 1.0 based on v1.16.0`;
+im MeshCore-Client wird wegen des 20-Byte-Feldes kurz `Moorbock FT1 v1.16`
 angezeigt.
 
 Build- und Upload-Environment:

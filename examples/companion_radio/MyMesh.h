@@ -5,14 +5,14 @@
 #include "AbstractUITask.h"
 
 /*------------ Frame Protocol --------------*/
-#define FIRMWARE_VER_CODE 11
+#define FIRMWARE_VER_CODE 13
 
 #ifndef FIRMWARE_BUILD_DATE
-#define FIRMWARE_BUILD_DATE "19 Apr 2026"
+#define FIRMWARE_BUILD_DATE "6 Jun 2026"
 #endif
 
 #ifndef STOCK_FIRMWARE_VERSION
-#define STOCK_FIRMWARE_VERSION "v1.15.0"
+#define STOCK_FIRMWARE_VERSION "v1.16.0"
 #endif
 
 #ifndef FIRMWARE_VERSION
@@ -20,7 +20,7 @@
 #endif
 
 #ifndef CLIENT_FIRMWARE_VERSION
-#define CLIENT_FIRMWARE_VERSION "Moorbock FT1 v1.15"
+#define CLIENT_FIRMWARE_VERSION "Moorbock FT1 v1.16"
 #endif
 
 #ifndef DISPLAY_FIRMWARE_VERSION
@@ -329,6 +329,9 @@ public:
   }
 #endif
 
+  // To check if there is pending work
+  bool hasPendingWork() const;
+
 private:
   void writeOKFrame();
   void writeErrFrame(uint8_t err_code);
@@ -377,7 +380,7 @@ private:
 
   // helpers, short-cuts
   void saveChannels() { _store->saveChannels(this); }
-  void saveContacts() { _store->saveContacts(this); }
+  void saveContacts();
 
   DataStore* _store;
   NodePrefs _prefs;
@@ -396,6 +399,7 @@ private:
   uint32_t _active_ble_pin;
   bool _iter_started;
   bool _cli_rescue;
+  bool send_unscoped;   // force un-scoped flood (instead of using send_scope)
   char cli_command[128];
   static const uint8_t QUICK_MESSAGE_SLOTS = 9;
   static const uint8_t QUICK_MESSAGE_SIZE = 80;
