@@ -12,6 +12,7 @@
 #endif
 
 #define AUTO_OFF_MILLIS      20000  // 20 seconds
+#define REMOTE_AUTO_OFF_MILLIS 300000UL
 #define BOOT_SCREEN_MILLIS   4000   // 4 seconds
 #define STATS_WINDOW_MILLIS  60000
 #define PATH_CHART_WIDTH     42
@@ -812,6 +813,29 @@ void UITask::renderCurrScreen() {
         _display->print("No savepoints");
       }
     }
+  } else if (_screen == 6) {  // scopes screen
+    _display->setTextSize(1);
+    _display->setCursor(UI_LEFT_MARGIN, 0);
+    _display->setColor(DisplayDriver::GREEN);
+    _display->print("Scopes");
+    renderTopStats();
+
+    _display->setColor(DisplayDriver::LIGHT);
+    if (_mesh) {
+      _display->setCursor(UI_LEFT_MARGIN, 16);
+      _display->print("Count Scope              Age");
+      bool any = false;
+      for (uint8_t i = 0; i < 8; i++) {
+        if (_mesh->getObserverScopeLine(i, tmp, sizeof(tmp))) {
+          _display->drawTextEllipsized(UI_LEFT_MARGIN, 28 + i * 11, _display->width() - UI_LEFT_MARGIN, tmp);
+          any = true;
+        }
+      }
+      if (!any) {
+        _display->setCursor(UI_LEFT_MARGIN, 38);
+        _display->print("No scoped RX yet");
+      }
+    }
   } else {  // mqtt screen
     _display->setTextSize(1);
     _display->setCursor(UI_LEFT_MARGIN, 0);
@@ -865,7 +889,6 @@ void UITask::renderCurrScreen() {
 #endif
 }
 
-#ifdef ENABLE_DISPLAY_DUMP
 const char* UITask::screenName(uint8_t screen) {
 #ifdef FIELD_MONITOR_LITE
   switch (screen) {
@@ -884,12 +907,14 @@ const char* UITask::screenName(uint8_t screen) {
     case 3: return "heatstrip";
     case 4: return "load";
     case 5: return "savepoints";
-    case 6: return "mqtt";
+    case 6: return "scopes";
+    case 7: return "mqtt";
     default: return "unknown";
   }
 #endif
 }
 
+#ifdef ENABLE_DISPLAY_DUMP
 bool UITask::renderScreenForDump(uint8_t screen) {
   if (screen >= screenCount()) return false;
 
@@ -904,6 +929,68 @@ bool UITask::renderScreenForDump(uint8_t screen) {
   return true;
 }
 #endif
+
+void UITask::setRemoteMode(bool enabled) {
+  _remote_mode = enabled;
+  _display->turnOn();
+  _auto_off = millis() + (enabled ? REMOTE_AUTO_OFF_MILLIS : AUTO_OFF_MILLIS);
+  _next_refresh = 0;
+  snprintf(_status, sizeof(_status), "Remote %s", enabled ? "on" : "off");
+  _status_until = millis() + 4000;
+}
+
+bool UITask::showScreen(uint8_t screen, const char* status) {
+  if (screen >= screenCount()) return false;
+  _screen = screen;
+  if (_screen == 3) updatePathHeatSnapshot();
+  if (status && status[0]) {
+    snprintf(_status, sizeof(_status), "%s", status);
+    _status_until = millis() + 4000;
+  } else {
+    _status[0] = 0;
+  }
+  _display->turnOn();
+  _auto_off = millis() + (_remote_mode ? REMOTE_AUTO_OFF_MILLIS : AUTO_OFF_MILLIS);
+  _next_refresh = 0;
+  return true;
+}
+
+bool UITask::showScreenByName(const char* name, const char* status) {
+  if (!name || !name[0]) return false;
+  for (uint8_t i = 0; i < screenCount(); i++) {
+    if (strcmp(name, screenName(i)) == 0) {
+      return showScreen(i, status);
+    }
+  }
+#ifndef FIELD_MONITOR_LITE
+  if (strcmp(name, "heat") == 0) return showScreen(3, status);
+  if (strcmp(name, "network") == 0) return showScreen(4, status);
+  if (strcmp(name, "savepoint") == 0) return showScreen(5, status);
+  if (strcmp(name, "scope") == 0) return showScreen(6, status);
+#else
+  if (strcmp(name, "heatstrip") == 0 || strcmp(name, "heat") == 0) return showScreen(3, status);
+#endif
+  return false;
+}
+
+void UITask::showNext() {
+  showScreen((_screen + 1) % screenCount());
+}
+
+void UITask::showPrevious() {
+  showScreen((_screen + screenCount() - 1) % screenCount());
+}
+
+void UITask::refreshNow(const char* status) {
+  if (_screen == 3) updatePathHeatSnapshot();
+  if (status && status[0]) {
+    snprintf(_status, sizeof(_status), "%s", status);
+    _status_until = millis() + 4000;
+  }
+  _display->turnOn();
+  _auto_off = millis() + (_remote_mode ? REMOTE_AUTO_OFF_MILLIS : AUTO_OFF_MILLIS);
+  _next_refresh = 0;
+}
 
 void UITask::loop() {
 #ifdef PIN_USER_BTN
@@ -936,7 +1023,7 @@ void UITask::loop() {
           } else if (_screen == 5) {
             _mesh->createObserverSavepoint(_activity_bins, _airtime_bins, RX_ACTIVITY_BINS, _activity_bin_index,
                                            _status, sizeof(_status));
-          } else if (_screen == 6) {
+          } else if (_screen == 7) {
 #if defined(ENABLE_OBSERVER_WEB_AP) && defined(ESP32)
             _mesh->toggleObserverWebAp(_status, sizeof(_status));
 #else
@@ -957,7 +1044,7 @@ void UITask::loop() {
             strcpy(_status, "Flood advert sent");
           }
 #else
-          if (_screen == 6) {
+          if (_screen == 7) {
 #if defined(ENABLE_OBSERVER_WEB_AP) && defined(ESP32)
             _mesh->toggleObserverWebStaView(_status, sizeof(_status));
 #else
@@ -1057,7 +1144,7 @@ void UITask::loop() {
 #ifdef FIELD_MONITOR_LITE
       _screen == 1 || _screen == 2 || _screen == 3
 #else
-      _screen == 1 || _screen == 2
+      _screen == 1 || _screen == 2 || _screen == 6
 #endif
       )) {
     uint32_t rx_total = _mesh->getObserverRxPackets();
@@ -1081,7 +1168,7 @@ void UITask::loop() {
 #ifdef FIELD_MONITOR_LITE
           (_screen == 1 || _screen == 2 || _screen == 3);
 #else
-          (_screen == 1 || _screen == 2 || _screen == 4);
+          (_screen == 1 || _screen == 2 || _screen == 4 || _screen == 6);
 #endif
       if (
 #ifndef FIELD_MONITOR_LITE
@@ -1096,6 +1183,8 @@ void UITask::loop() {
       }
       if (slow_screen) {
         _auto_off = _next_refresh + 5000;
+      } else if (_remote_mode) {
+        _auto_off = millis() + REMOTE_AUTO_OFF_MILLIS;
       }
     }
     if (millis() > _auto_off) {

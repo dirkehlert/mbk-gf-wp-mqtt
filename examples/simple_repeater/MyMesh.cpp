@@ -1,4 +1,5 @@
 #include "MyMesh.h"
+#include "UITask.h"
 #include <algorithm>
 #if defined(ESP32)
 #include <esp_system.h>
@@ -821,12 +822,14 @@ void MyMesh::logRx(mesh::Packet *pkt, int len, float score) {
   setObserverHealthPhase(8);
   rememberObserverLastHop(pkt, (int8_t)snr_x4);
   setObserverHealthPhase(9);
+  rememberObserverScope(pkt);
+  setObserverHealthPhase(10);
 #ifdef WITH_BRIDGE
   if (_prefs.bridge_pkt_src == 1) {
     bridge.sendPacket(pkt);
   }
 #endif
-  setObserverHealthPhase(10);
+  setObserverHealthPhase(11);
 #ifdef WITH_MQTT_OBSERVER
   if (mqtt_observer.sendPacket(pkt, true, (int)_radio->getLastRSSI(), snr_x4)) {
     OBSERVER_LOCK();
@@ -1324,6 +1327,7 @@ MyMesh::MyMesh(mesh::MainBoard &board, mesh::Radio &radio, mesh::MillisecondCloc
 #endif
 {
   _board = &board;
+  _ui_task = nullptr;
   last_millis = 0;
   uptime_millis = 0;
   next_local_advert = next_flood_advert = 0;
@@ -1419,6 +1423,7 @@ MyMesh::MyMesh(mesh::MainBoard &board, mesh::Radio &radio, mesh::MillisecondCloc
 #endif
   memset(observer_paths, 0, sizeof(observer_paths));
   memset(observer_last_hops, 0, sizeof(observer_last_hops));
+  memset(observer_scopes, 0, sizeof(observer_scopes));
 #ifdef ENABLE_OBSERVER_CLOCK_SYNC
   memset(observer_clock_sync_samples, 0, sizeof(observer_clock_sync_samples));
 #endif
@@ -1861,6 +1866,116 @@ bool MyMesh::getObserverLatestPathLine(char* dest, size_t dest_size) const {
   formatAge(age_col, sizeof(age_col), age_secs);
   snprintf(dest, dest_size, "%s %s", age_col, item.text);
   return true;
+}
+
+void MyMesh::rememberObserverScope(mesh::Packet* packet) {
+  if (!packet) return;
+
+  uint16_t code = 0;
+  char name[OBSERVER_SCOPE_NAME_SIZE];
+  name[0] = 0;
+  bool known_scope = false;
+
+  if (packet->hasTransportCodes()) {
+    code = packet->transport_codes[0];
+    RegionEntry* region = region_map.findMatch(packet, 0);
+    if (region && region->name[0]) {
+      StrHelper::strncpy(name, region->name, sizeof(name));
+      known_scope = true;
+    } else {
+      snprintf(name, sizeof(name), "0x%04X", (unsigned int)code);
+    }
+  } else if (packet->getRouteType() == ROUTE_TYPE_FLOOD) {
+    StrHelper::strncpy(name, "*", sizeof(name));
+  } else {
+    StrHelper::strncpy(name, "none", sizeof(name));
+  }
+
+  unsigned long now = millis();
+  OBSERVER_LOCK();
+  for (uint8_t i = 0; i < OBSERVER_SCOPE_HISTORY_SIZE; i++) {
+    ObserverScopeInfo& item = observer_scopes[i];
+    if (item.seen_at == 0) continue;
+    bool same_scope = known_scope ? strcmp(item.name, name) == 0 :
+                                    (item.code == code && strcmp(item.name, name) == 0);
+    if (same_scope) {
+      item.seen_at = now;
+      item.code = code;
+      if (item.count < UINT32_MAX) item.count++;
+      OBSERVER_UNLOCK();
+      return;
+    }
+  }
+
+  int slot = -1;
+  unsigned long oldest_seen = 0xFFFFFFFF;
+  uint32_t lowest_count = UINT32_MAX;
+  for (uint8_t i = 0; i < OBSERVER_SCOPE_HISTORY_SIZE; i++) {
+    ObserverScopeInfo& item = observer_scopes[i];
+    if (item.seen_at == 0) {
+      slot = i;
+      break;
+    }
+    if (item.count < lowest_count || (item.count == lowest_count && item.seen_at < oldest_seen)) {
+      slot = i;
+      lowest_count = item.count;
+      oldest_seen = item.seen_at;
+    }
+  }
+
+  ObserverScopeInfo& item = observer_scopes[slot >= 0 ? slot : 0];
+  item.seen_at = now;
+  item.count = 1;
+  item.code = code;
+  StrHelper::strncpy(item.name, name, sizeof(item.name));
+  OBSERVER_UNLOCK();
+}
+
+bool MyMesh::getObserverScopeLine(uint8_t index, char* dest, size_t dest_size) const {
+  if (!dest || dest_size == 0) return false;
+  dest[0] = 0;
+
+  uint8_t found = 0;
+  ObserverScopeInfo scopes[OBSERVER_SCOPE_HISTORY_SIZE];
+  OBSERVER_LOCK();
+  memcpy(scopes, observer_scopes, sizeof(scopes));
+  OBSERVER_UNLOCK();
+
+  bool selected[OBSERVER_SCOPE_HISTORY_SIZE];
+  memset(selected, 0, sizeof(selected));
+  for (uint8_t i = 0; i < OBSERVER_SCOPE_HISTORY_SIZE; i++) {
+    int best = -1;
+    uint32_t best_count = 0;
+    unsigned long best_seen = 0;
+    for (uint8_t j = 0; j < OBSERVER_SCOPE_HISTORY_SIZE; j++) {
+      const ObserverScopeInfo& item = scopes[j];
+      if (item.seen_at == 0 || selected[j]) continue;
+      if (item.count > best_count || (item.count == best_count && item.seen_at > best_seen)) {
+        best = j;
+        best_count = item.count;
+        best_seen = item.seen_at;
+      }
+    }
+
+    if (best < 0) return false;
+    selected[best] = true;
+    if (found == index) {
+      const ObserverScopeInfo& item = scopes[best];
+      char count_col[8];
+      char age_col[5];
+      unsigned long age_secs = (millis() - item.seen_at) / 1000;
+      if (item.count > 999999) {
+        snprintf(count_col, sizeof(count_col), "999k+");
+      } else {
+        snprintf(count_col, sizeof(count_col), "%lu", (unsigned long)item.count);
+      }
+      formatAge(age_col, sizeof(age_col), age_secs);
+      snprintf(dest, dest_size, "%5s %-18s %s", count_col, item.name, age_col);
+      return true;
+    }
+    found++;
+  }
+  return false;
 }
 
 void MyMesh::rememberObserverLastHop(const mesh::Packet* packet, int8_t snr_x4) {
@@ -3027,6 +3142,7 @@ void MyMesh::resetObserverLiveStats() {
   observer_mqtt_published = 0;
   memset(observer_paths, 0, sizeof(observer_paths));
   memset(observer_last_hops, 0, sizeof(observer_last_hops));
+  memset(observer_scopes, 0, sizeof(observer_scopes));
   OBSERVER_UNLOCK();
 }
 
@@ -3282,8 +3398,89 @@ void MyMesh::handleCommand(uint32_t sender_timestamp, char *command, char *reply
     command += 3;
   }
 
+  if (strcmp(command, "remote on") == 0 || strcmp(command, "remote.on") == 0) {
+    if (!_ui_task) {
+      strcpy(reply, "Err - display n/a");
+    } else {
+      _ui_task->setRemoteMode(true);
+      strcpy(reply, "Remote on");
+    }
+  } else if (strcmp(command, "remote off") == 0 || strcmp(command, "remote.off") == 0) {
+    if (!_ui_task) {
+      strcpy(reply, "Err - display n/a");
+    } else {
+      _ui_task->setRemoteMode(false);
+      strcpy(reply, "Remote off");
+    }
+  } else if (strcmp(command, "remote status") == 0 || strcmp(command, "remote.status") == 0) {
+    if (!_ui_task) {
+      strcpy(reply, "Remote n/a");
+    } else {
+      snprintf(reply, 160, "Remote:%s screen:%u %s",
+               _ui_task->isRemoteMode() ? "on" : "off",
+               (unsigned int)_ui_task->currentScreen(),
+               UITask::screenName(_ui_task->currentScreen()));
+    }
+  } else if (strcmp(command, "show.status") == 0 || strcmp(command, "show status") == 0) {
+    if (!_ui_task || !_ui_task->showScreenByName("status")) strcpy(reply, "Err - bad screen");
+    else strcpy(reply, "Show status");
+  } else if (strcmp(command, "show.paths") == 0 || strcmp(command, "show paths") == 0) {
+    if (!_ui_task || !_ui_task->showScreenByName("paths")) strcpy(reply, "Err - bad screen");
+    else strcpy(reply, "Show paths");
+  } else if (strcmp(command, "show.heards") == 0 || strcmp(command, "show heards") == 0) {
+    if (!_ui_task || !_ui_task->showScreenByName("heards")) strcpy(reply, "Err - bad screen");
+    else strcpy(reply, "Show heards");
+  } else if (strcmp(command, "show.heatstrip") == 0 || strcmp(command, "show heatstrip") == 0 ||
+             strcmp(command, "show.heat") == 0 || strcmp(command, "show heat") == 0) {
+    if (!_ui_task || !_ui_task->showScreenByName("heatstrip", "Heat refreshed")) strcpy(reply, "Err - bad screen");
+    else strcpy(reply, "Show heatstrip");
+  } else if (strcmp(command, "show.load") == 0 || strcmp(command, "show load") == 0) {
+    if (!_ui_task || !_ui_task->showScreenByName("load")) strcpy(reply, "Err - bad screen");
+    else strcpy(reply, "Show load");
+  } else if (strcmp(command, "show.savepoints") == 0 || strcmp(command, "show savepoints") == 0) {
+    if (!_ui_task || !_ui_task->showScreenByName("savepoints")) strcpy(reply, "Err - bad screen");
+    else strcpy(reply, "Show savepoints");
+  } else if (strcmp(command, "show.scopes") == 0 || strcmp(command, "show scopes") == 0) {
+    if (!_ui_task || !_ui_task->showScreenByName("scopes")) strcpy(reply, "Err - bad screen");
+    else strcpy(reply, "Show scopes");
+  } else if (strcmp(command, "show.mqtt") == 0 || strcmp(command, "show mqtt") == 0) {
+    if (!_ui_task || !_ui_task->showScreenByName("mqtt")) strcpy(reply, "Err - bad screen");
+    else strcpy(reply, "Show mqtt");
+  } else if (strcmp(command, "show.next") == 0 || strcmp(command, "show next") == 0) {
+    if (!_ui_task) {
+      strcpy(reply, "Err - display n/a");
+    } else {
+      _ui_task->showNext();
+      snprintf(reply, 160, "Show %s", UITask::screenName(_ui_task->currentScreen()));
+    }
+  } else if (strcmp(command, "show.prev") == 0 || strcmp(command, "show previous") == 0 ||
+             strcmp(command, "show.previous") == 0 || strcmp(command, "show prev") == 0) {
+    if (!_ui_task) {
+      strcpy(reply, "Err - display n/a");
+    } else {
+      _ui_task->showPrevious();
+      snprintf(reply, 160, "Show %s", UITask::screenName(_ui_task->currentScreen()));
+    }
+  } else if (strcmp(command, "show.refresh") == 0 || strcmp(command, "show refresh") == 0) {
+    if (!_ui_task) {
+      strcpy(reply, "Err - display n/a");
+    } else {
+      _ui_task->refreshNow("Refreshed");
+      snprintf(reply, 160, "Show %s refreshed", UITask::screenName(_ui_task->currentScreen()));
+    }
+  } else if (strcmp(command, "show.status?") == 0 || strcmp(command, "show status?") == 0 ||
+             strcmp(command, "show.current") == 0 || strcmp(command, "show current") == 0) {
+    if (!_ui_task) {
+      strcpy(reply, "Show n/a");
+    } else {
+      snprintf(reply, 160, "Show screen:%u %s remote:%s",
+               (unsigned int)_ui_task->currentScreen(),
+               UITask::screenName(_ui_task->currentScreen()),
+               _ui_task->isRemoteMode() ? "on" : "off");
+    }
+  }
   // handle ACL related commands
-  if (memcmp(command, "setperm ", 8) == 0) {   // format:  setperm {pubkey-hex} {permissions-int8}
+  else if (memcmp(command, "setperm ", 8) == 0) {   // format:  setperm {pubkey-hex} {permissions-int8}
     char* hex = &command[8];
     char* sp = strchr(hex, ' ');   // look for separator char
     if (sp == NULL) {
@@ -3530,17 +3727,30 @@ void MyMesh::handleCommand(uint32_t sender_timestamp, char *command, char *reply
     strcpy(reply, "OK - SP cleared");
   }
 #endif
-  else if (strcmp(command, "wp.help") == 0 || strcmp(command, "help wp") == 0) {
+  else if (strcmp(command, "help") == 0 || strcmp(command, "?") == 0 ||
+           strcmp(command, "wp.help") == 0 || strcmp(command, "help wp") == 0) {
     StrHelper::strncpy(reply,
                        "diag\n"
-                       "ap.on/off/status\n"
-                       "view.on/off/status\n"
-                       "mqtt.on/off/status\n"
-                       "sp.create/list\n"
+                       "remote.on/off/status\n"
+                       "show.* (help show)\n"
+                       "ap/view/mqtt .on/off/status\n"
+                       "sp.* (help sp)\n"
+                       "discover.neighbors",
+                       160);
+  } else if (strcmp(command, "help show") == 0 || strcmp(command, "show.help") == 0) {
+    StrHelper::strncpy(reply,
+                       "show.status/paths/heards\n"
+                       "show.heatstrip/load\n"
+                       "show.savepoints/scopes/mqtt\n"
+                       "show.next/prev/refresh/current",
+                       160);
+  } else if (strcmp(command, "help sp") == 0 || strcmp(command, "sp.help") == 0) {
+    StrHelper::strncpy(reply,
+                       "sp.create\n"
+                       "sp.list\n"
                        "sp.show <id> [page]\n"
                        "sp.delete <id>\n"
-                       "sp.clear\n"
-                       "discover.neighbors",
+                       "sp.clear",
                        160);
   }
   else if (memcmp(command, "discover.neighbors", 18) == 0) {

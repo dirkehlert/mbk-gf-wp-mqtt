@@ -2,6 +2,7 @@
 
 #include <Arduino.h> // needed for PlatformIO
 #include <Mesh.h>
+#include <helpers/sensors/LPPDataHelpers.h>
 
 #define CMD_APP_START                 1
 #define CMD_SEND_TXT_MSG              2
@@ -107,6 +108,7 @@
 
 #define PUBLIC_GROUP_PSK                "izOH6cXN6mrJ5e26oRXNcg=="
 #define QUICK_MESSAGES_FILE             "/quickmsg"
+#define SCOPE_CACHE_FILE                "/scopecache"
 #define ANON_REQ_TYPE_REGIONS           0x01
 #define CTL_TYPE_NODE_DISCOVER_REQ      0x80
 #define CTL_TYPE_NODE_DISCOVER_RESP     0x90
@@ -316,6 +318,33 @@ static void formatMonitorSnrX4(char* dest, size_t dest_size, int8_t snr_x4) {
   snprintf(dest, dest_size, "%s%d", value < 0 ? "-" : "", whole);
 }
 
+static double degToRad(double deg) {
+  return deg * 0.017453292519943295;
+}
+
+static float distanceMeters(double from_lat, double from_lon, double to_lat, double to_lon) {
+  double lat1 = degToRad(from_lat);
+  double lat2 = degToRad(to_lat);
+  double dlat = degToRad(to_lat - from_lat);
+  double dlon = degToRad(to_lon - from_lon);
+  double a = sin(dlat / 2.0) * sin(dlat / 2.0) +
+             cos(lat1) * cos(lat2) * sin(dlon / 2.0) * sin(dlon / 2.0);
+  double c = 2.0 * atan2(sqrt(a), sqrt(1.0 - a));
+  return (float)(6371000.0 * c);
+}
+
+static uint16_t bearingDegrees(double from_lat, double from_lon, double to_lat, double to_lon) {
+  double lat1 = degToRad(from_lat);
+  double lat2 = degToRad(to_lat);
+  double dlon = degToRad(to_lon - from_lon);
+  double y = sin(dlon) * cos(lat2);
+  double x = cos(lat1) * sin(lat2) - sin(lat1) * cos(lat2) * cos(dlon);
+  int bearing = (int)round(atan2(y, x) * 57.29577951308232);
+  bearing %= 360;
+  if (bearing < 0) bearing += 360;
+  return (uint16_t)bearing;
+}
+
 void MyMesh::monitorRollActivity() {
   unsigned long now = millis();
   if (monitor_next_activity_rollover == 0) {
@@ -472,6 +501,21 @@ void MyMesh::logRx(mesh::Packet* packet, int len, float score) {
   notePacketScope(packet);
   rememberMonitorPath(packet);
   rememberMonitorLastHop(packet, monitor_last_snr_x4);
+}
+
+void MyMesh::resetMonitorLiveStats() {
+  monitor_rx_packets = 0;
+  monitor_last_snr_x4 = 0;
+  monitor_activity_index = 0;
+  monitor_next_activity_rollover = 0;
+  memset(monitor_paths, 0, sizeof(monitor_paths));
+  memset(monitor_last_hops, 0, sizeof(monitor_last_hops));
+  memset(monitor_activity_bins, 0, sizeof(monitor_activity_bins));
+  memset(monitor_airtime_bins, 0, sizeof(monitor_airtime_bins));
+  for (uint8_t i = 0; i < SCOPE_CACHE_SIZE; i++) {
+    scope_cache[i].rx_count = 0;
+    scope_cache[i].seen_timestamp = scope_cache[i].name[0] ? getRTCClock()->getCurrentTime() : 0;
+  }
 }
 
 bool MyMesh::getMonitorPathLine(uint8_t index, char* dest, size_t dest_size) const {
@@ -819,6 +863,308 @@ int MyMesh::getQuickSendTargets(QuickSendTarget dest[], int max_num) {
   return count;
 }
 
+uint8_t MyMesh::getFavouriteChatContacts(FavouriteChatContact dest[], uint8_t max_count) {
+  if (!dest || max_count == 0) return 0;
+
+  uint8_t count = 0;
+  for (uint32_t i = 0; i < getNumContacts() && count < max_count; i++) {
+    ContactInfo contact;
+    if (!getContactByIdx(i, contact)) continue;
+    if (contact.type != ADV_TYPE_CHAT) continue;
+    if ((contact.flags & 0x01) == 0) continue;
+
+    FavouriteChatContact* fav = &dest[count++];
+    memset(fav, 0, sizeof(*fav));
+    memcpy(fav->pubkey_prefix, contact.id.pub_key, sizeof(fav->pubkey_prefix));
+    StrHelper::strncpy(fav->name, contact.name[0] ? contact.name : "<unnamed>", sizeof(fav->name));
+  }
+  return count;
+}
+
+bool MyMesh::startPositionTrack(const uint8_t* pubkey_prefix, uint8_t prefix_len, uint16_t duration_min) {
+  if (!pubkey_prefix || prefix_len == 0) return false;
+
+  ContactInfo* recipient = lookupContactByPubKey(pubkey_prefix, prefix_len);
+  if (!recipient || recipient->type != ADV_TYPE_CHAT || (recipient->flags & 0x01) == 0) return false;
+
+  resetPathTo(*recipient);
+  dirty_contacts_expiry = futureMillis(LAZY_CONTACTS_WRITE_DELAY);
+
+  memcpy(position_track_pubkey, recipient->id.pub_key, sizeof(position_track_pubkey));
+  StrHelper::strncpy(position_track_name, recipient->name[0] ? recipient->name : "<unnamed>", sizeof(position_track_name));
+  position_track_duration_min = duration_min;
+  position_track_started_at = millis();
+  position_track_twice_mode = (duration_min == 0);
+  position_track_until = position_track_twice_mode
+                         ? position_track_started_at + 10UL * 60000UL
+                         : position_track_started_at + (unsigned long)duration_min * 60000UL;
+  position_track_next_req = 0;
+  position_track_last_fix_at = 0;
+  position_track_last_resp_utc = 0;
+  position_track_req_count = 0;
+  position_track_resp_count = 0;
+  position_track_no_gps_count = 0;
+  position_track_last_resp_len = 0;
+  position_track_hop_count = OUT_PATH_UNKNOWN;
+  pending_position_track = 0;
+  position_track_active = true;
+  position_track_waiting = false;
+  position_track_has_position = false;
+  position_track_has_error = false;
+  position_track_ref_is_live_gps = false;
+  position_track_last_sent_flood = false;
+  return true;
+}
+
+void MyMesh::stopPositionTrack() {
+  position_track_active = false;
+  position_track_waiting = false;
+  pending_position_track = 0;
+}
+
+void MyMesh::clearPositionTrackResult() {
+  stopPositionTrack();
+  position_track_name[0] = 0;
+  position_track_duration_min = 0;
+  position_track_last_fix_at = 0;
+  position_track_last_resp_utc = 0;
+  position_track_has_position = false;
+  position_track_has_error = false;
+  position_track_ref_is_live_gps = false;
+  position_track_last_sent_flood = false;
+  position_track_twice_mode = false;
+  position_track_req_count = 0;
+  position_track_resp_count = 0;
+  position_track_no_gps_count = 0;
+  position_track_last_resp_len = 0;
+  position_track_hop_count = OUT_PATH_UNKNOWN;
+  position_track_distance_m = 0;
+  position_track_bearing_deg = 0;
+  position_track_lat = 0;
+  position_track_lon = 0;
+  position_track_ref_lat = 0;
+  position_track_ref_lon = 0;
+}
+
+bool MyMesh::getPositionTrackInfo(PositionTrackInfo& info) const {
+  memset(&info, 0, sizeof(info));
+  info.active = position_track_active;
+  info.waiting = position_track_waiting;
+  info.has_position = position_track_has_position;
+  info.has_error = position_track_has_error;
+  info.ref_is_live_gps = position_track_ref_is_live_gps;
+  info.last_sent_flood = position_track_last_sent_flood;
+  info.twice_mode = position_track_twice_mode;
+  StrHelper::strncpy(info.target_name, position_track_name, sizeof(info.target_name));
+  info.duration_min = position_track_duration_min;
+  info.req_count = position_track_req_count;
+  info.resp_count = position_track_resp_count;
+  info.no_gps_count = position_track_no_gps_count;
+  info.last_resp_len = position_track_last_resp_len;
+  info.hop_count = position_track_hop_count;
+  info.last_resp_utc = position_track_last_resp_utc;
+
+  unsigned long now = millis();
+  if (position_track_active && (long)(position_track_until - now) > 0) {
+    info.remaining_min = position_track_twice_mode
+                         ? 0
+                         : (uint16_t)(((position_track_until - now) + 59999UL) / 60000UL);
+  }
+  if (position_track_last_fix_at > 0) {
+    info.age_secs = (uint16_t)min(65535UL, (now - position_track_last_fix_at) / 1000UL);
+  }
+  info.distance_m = position_track_distance_m;
+  info.bearing_deg = position_track_bearing_deg;
+  info.lat = position_track_lat;
+  info.lon = position_track_lon;
+  info.ref_lat = position_track_ref_lat;
+  info.ref_lon = position_track_ref_lon;
+  return info.active || info.has_position || info.target_name[0] != 0;
+}
+
+static int sort_position_by_distance(const void* a, const void* b) {
+  const FavouritePositionInfo* pa = (const FavouritePositionInfo*)a;
+  const FavouritePositionInfo* pb = (const FavouritePositionInfo*)b;
+  if (pa->distance_m < pb->distance_m) return -1;
+  if (pa->distance_m > pb->distance_m) return 1;
+  return 0;
+}
+
+uint8_t MyMesh::getFavouritePositions(FavouritePositionInfo dest[], uint8_t max_count) {
+  if (!dest || max_count == 0) return 0;
+
+  LocationProvider* gps = sensors.getLocationProvider();
+  bool live_ref = gps && gps->isValid();
+  double ref_lat = live_ref ? ((double)gps->getLatitude()) / 1000000.0 : sensors.node_lat;
+  double ref_lon = live_ref ? ((double)gps->getLongitude()) / 1000000.0 : sensors.node_lon;
+  if (ref_lat == 0.0 && ref_lon == 0.0) return 0;
+
+  uint32_t now_utc = getRTCClock()->getCurrentTime();
+  uint8_t count = 0;
+  for (uint32_t i = 0; i < getNumContacts() && count < max_count; i++) {
+    ContactInfo contact;
+    if (!getContactByIdx(i, contact)) continue;
+    if (contact.type != ADV_TYPE_CHAT) continue;
+    if ((contact.flags & 0x01) == 0) continue;
+
+    FavouritePositionInfo* pos = &dest[count];
+    memset(pos, 0, sizeof(*pos));
+    memcpy(pos->pubkey_prefix, contact.id.pub_key, sizeof(pos->pubkey_prefix));
+    StrHelper::strncpy(pos->name, contact.name[0] ? contact.name : "<unnamed>", sizeof(pos->name));
+    pos->ref_is_live_gps = live_ref;
+    pos->hop_count = contact.out_path_len;
+
+    bool has_tracked = position_track_has_position &&
+                       memcmp(contact.id.pub_key, position_track_pubkey, sizeof(position_track_pubkey)) == 0;
+    bool has_advert_position = !(contact.gps_lat == 0 && contact.gps_lon == 0);
+
+    uint32_t advert_seen = 0;
+    if (has_advert_position) {
+      for (uint8_t j = 0; j < ADVERT_PATH_TABLE_SIZE; j++) {
+        if (memcmp(advert_paths[j].pubkey_prefix, contact.id.pub_key, sizeof(advert_paths[j].pubkey_prefix)) == 0) {
+          advert_seen = advert_paths[j].recv_timestamp;
+          break;
+        }
+      }
+    }
+
+    bool use_tracked = has_tracked &&
+                       (!has_advert_position ||
+                        advert_seen == 0 ||
+                        position_track_last_resp_utc == 0 ||
+                        position_track_last_resp_utc >= advert_seen);
+    if (use_tracked) {
+      pos->source = FAV_POSITION_SOURCE_TRACK;
+      pos->seen_utc = position_track_last_resp_utc;
+      pos->age_secs = position_track_last_fix_at == 0 ? 0 :
+                      (uint16_t)min(65535UL, (millis() - position_track_last_fix_at) / 1000UL);
+      pos->distance_m = distanceMeters(ref_lat, ref_lon, position_track_lat, position_track_lon);
+      pos->bearing_deg = bearingDegrees(ref_lat, ref_lon, position_track_lat, position_track_lon);
+      pos->lat = position_track_lat;
+      pos->lon = position_track_lon;
+      pos->hop_count = position_track_hop_count;
+      count++;
+      continue;
+    }
+
+    if (!has_advert_position) continue;
+    pos->source = FAV_POSITION_SOURCE_ADVERT;
+    pos->lat = ((double)contact.gps_lat) / 1000000.0;
+    pos->lon = ((double)contact.gps_lon) / 1000000.0;
+    pos->distance_m = distanceMeters(ref_lat, ref_lon, pos->lat, pos->lon);
+    pos->bearing_deg = bearingDegrees(ref_lat, ref_lon, pos->lat, pos->lon);
+
+    pos->seen_utc = advert_seen;
+    if (advert_seen > 0 && now_utc >= advert_seen) pos->age_secs = (uint16_t)min(65535UL, now_utc - advert_seen);
+    count++;
+  }
+
+  qsort(dest, count, sizeof(dest[0]), sort_position_by_distance);
+  return count;
+}
+
+bool MyMesh::sendPositionTrackReq() {
+  ContactInfo* recipient = lookupContactByPubKey(position_track_pubkey, sizeof(position_track_pubkey));
+  if (!recipient) {
+    position_track_has_error = true;
+    position_track_hop_count = OUT_PATH_UNKNOWN;
+    return false;
+  }
+  position_track_hop_count = recipient->out_path_len;
+
+  uint32_t tag, est_timeout;
+  int result = sendRequest(*recipient, REQ_TYPE_GET_TELEMETRY_DATA, tag, est_timeout);
+  if (result == MSG_SEND_FAILED) {
+    position_track_has_error = true;
+    return false;
+  }
+
+  pending_position_track = tag;
+  position_track_waiting = true;
+  position_track_has_error = false;
+  position_track_last_sent_flood = (result == MSG_SEND_SENT_FLOOD);
+  if (position_track_req_count < UINT16_MAX) position_track_req_count++;
+  unsigned long retry_after = est_timeout + 5000UL;
+  if (retry_after < 15000UL) retry_after = 15000UL;
+  if (retry_after > 60000UL) retry_after = 60000UL;
+  position_track_next_req = millis() + retry_after;
+  return true;
+}
+
+void MyMesh::pollPositionTrack() {
+  if (!position_track_active) return;
+
+  unsigned long now = millis();
+  if (position_track_twice_mode && position_track_req_count >= 2 && !position_track_waiting) {
+    stopPositionTrack();
+    return;
+  }
+  if ((long)(now - position_track_until) >= 0) {
+    stopPositionTrack();
+    return;
+  }
+
+  if (position_track_next_req > 0 && (long)(now - position_track_next_req) < 0) return;
+  pending_position_track = 0;
+  position_track_waiting = false;
+  sendPositionTrackReq();
+}
+
+bool MyMesh::ingestPositionTrackResponse(const ContactInfo& contact, const uint8_t* data, uint8_t len) {
+  if (!position_track_active || len <= 4 || pending_position_track == 0) return false;
+
+  uint32_t tag;
+  memcpy(&tag, data, 4);
+  if (tag != pending_position_track) return false;
+  if (memcmp(contact.id.pub_key, position_track_pubkey, sizeof(position_track_pubkey)) != 0) return false;
+
+  pending_position_track = 0;
+  position_track_waiting = false;
+  position_track_next_req = millis() + 60000UL;
+  position_track_last_resp_len = len;
+  position_track_last_resp_utc = getRTCClock()->getCurrentTime();
+  if (position_track_resp_count < UINT16_MAX) position_track_resp_count++;
+  if (position_track_twice_mode) {
+    if (position_track_resp_count >= 2) {
+      stopPositionTrack();
+    } else {
+      position_track_next_req = millis() + 60000UL;
+    }
+  }
+
+  LPPReader reader(&data[4], len - 4);
+  uint8_t channel, type;
+  while (reader.readHeader(channel, type)) {
+    if (type == LPP_GPS) {
+      float lat, lon, alt;
+      if (reader.readGPS(lat, lon, alt)) {
+        LocationProvider* gps = sensors.getLocationProvider();
+        bool live_ref = gps && gps->isValid();
+        double ref_lat = live_ref ? ((double)gps->getLatitude()) / 1000000.0 : sensors.node_lat;
+        double ref_lon = live_ref ? ((double)gps->getLongitude()) / 1000000.0 : sensors.node_lon;
+
+        position_track_lat = lat;
+        position_track_lon = lon;
+        position_track_ref_lat = ref_lat;
+        position_track_ref_lon = ref_lon;
+        position_track_ref_is_live_gps = live_ref;
+        position_track_distance_m = distanceMeters(ref_lat, ref_lon, position_track_lat, position_track_lon);
+        position_track_bearing_deg = bearingDegrees(ref_lat, ref_lon, position_track_lat, position_track_lon);
+        position_track_last_fix_at = millis();
+        position_track_has_position = true;
+        position_track_has_error = false;
+        return true;
+      }
+      break;
+    }
+    reader.skipData(type);
+  }
+
+  position_track_has_error = true;
+  if (position_track_no_gps_count < UINT16_MAX) position_track_no_gps_count++;
+  return true;
+}
+
 bool MyMesh::sendQuickText(const QuickSendTarget& target, const char* text, bool* sent_flood) {
   if (sent_flood) *sent_flood = false;
   if (!text || !text[0]) return false;
@@ -877,6 +1223,25 @@ bool MyMesh::sendQuickText(const QuickSendTarget& target, const char* text, bool
     next_ack_idx = (next_ack_idx + 1) % EXPECTED_ACK_TABLE_SIZE;
   }
   return true;
+}
+
+bool MyMesh::setQuickSendScope(const char* name) {
+  if (!name || !name[0]) {
+    clearQuickSendScope();
+    return true;
+  }
+
+  char auto_name[SCOPE_NAME_SIZE + 1];
+  snprintf(auto_name, sizeof(auto_name), "#%s", name);
+  TransportKeyStore temp;
+  TransportKey key;
+  temp.getAutoKeyFor(0, auto_name, key);
+  memcpy(send_scope.key, key.key, sizeof(send_scope.key));
+  return true;
+}
+
+void MyMesh::clearQuickSendScope() {
+  memset(send_scope.key, 0, sizeof(send_scope.key));
 }
 
 bool MyMesh::sendQuickReply(const uint8_t* pubkey_prefix, uint8_t prefix_len, const char* text, bool* sent_flood) {
@@ -1150,10 +1515,10 @@ bool MyMesh::sendMonitorHeatstripReply(const ContactInfo& recipient) {
   return sendMessage(recipient, getRTCClock()->getCurrentTimeUnique(), 0, reply, expected_ack, est_timeout) != MSG_SEND_FAILED;
 }
 
-void MyMesh::rememberScopeName(const char* name, const char* source) {
-  if (!name || !name[0] || strcmp(name, "*") == 0) return;
+bool MyMesh::rememberScopeName(const char* name, const char* source, bool discovered) {
+  if (!name || !name[0] || strcmp(name, "*") == 0) return false;
   while (*name == ' ' || *name == '#') name++;
-  if (!name[0]) return;
+  if (!name[0]) return false;
 
   char clean[SCOPE_NAME_SIZE];
   size_t len = 0;
@@ -1163,7 +1528,7 @@ void MyMesh::rememberScopeName(const char* name, const char* source) {
   }
   while (len > 0 && clean[len - 1] == ' ') len--;
   clean[len] = 0;
-  if (!clean[0] || strcmp(clean, "*") == 0) return;
+  if (!clean[0] || strcmp(clean, "*") == 0) return false;
 
   ScopeInfo* slot = nullptr;
   ScopeInfo* empty = nullptr;
@@ -1182,14 +1547,21 @@ void MyMesh::rememberScopeName(const char* name, const char* source) {
     }
   }
   if (!slot) slot = empty ? empty : oldest_zero_rx;
-  if (!slot) return;
+  if (!slot) return false;
 
+  bool changed = false;
   if (slot->name[0] == 0 || strcmp(slot->name, clean) != 0) {
     memset(slot, 0, sizeof(*slot));
+    changed = true;
   }
   StrHelper::strncpy(slot->name, clean, sizeof(slot->name));
   StrHelper::strncpy(slot->source, source && source[0] ? source : "repeater", sizeof(slot->source));
   slot->seen_timestamp = getRTCClock()->getCurrentTime();
+  if (discovered && (slot->flags & SCOPE_FLAG_DISCOVERED) == 0) {
+    slot->flags |= SCOPE_FLAG_DISCOVERED;
+    changed = true;
+  }
+  return changed;
 }
 
 void MyMesh::noteScopeRx(const char* name, const char* source) {
@@ -1255,14 +1627,16 @@ void MyMesh::ingestScopeNames(const ContactInfo& contact, const char* names) {
   char work[120];
   StrHelper::strncpy(work, names, sizeof(work));
   char* cursor = work;
+  bool changed = false;
   while (*cursor) {
     while (*cursor == ',' || *cursor == ' ' || *cursor == '\n' || *cursor == '\r') cursor++;
     if (!*cursor) break;
     char* start = cursor;
     while (*cursor && *cursor != ',') cursor++;
     if (*cursor) *cursor++ = 0;
-    rememberScopeName(start, contact.name);
+    changed = rememberScopeName(start, contact.name, true) || changed;
   }
+  if (changed) saveScopeCache();
 }
 
 bool MyMesh::isPendingScopeTag(uint32_t tag) {
@@ -1345,6 +1719,64 @@ void MyMesh::printQuickMessages() {
     Serial.printf("  %u: %s\n", (unsigned int)i + 1, quick_messages[i][0] ? quick_messages[i] : "<leer>");
   }
   Serial.println("  gps: Meine Position ist: <lat>, <lon>");
+}
+
+void MyMesh::printFavouriteChatContacts() {
+  uint8_t fav_count = 0;
+  Serial.println("Favourite chat contacts:");
+  for (uint32_t i = 0; i < getNumContacts(); i++) {
+    ContactInfo contact;
+    if (!getContactByIdx(i, contact)) continue;
+    if (contact.type != ADV_TYPE_CHAT) continue;
+    if ((contact.flags & 0x01) == 0) continue;
+
+    fav_count++;
+    Serial.printf("  %u: %s [%02X%02X%02X%02X] flags=0x%02X\n",
+                  (unsigned int)fav_count,
+                  contact.name[0] ? contact.name : "<unnamed>",
+                  contact.id.pub_key[0],
+                  contact.id.pub_key[1],
+                  contact.id.pub_key[2],
+                  contact.id.pub_key[3],
+                  contact.flags);
+  }
+  if (fav_count == 0) {
+    Serial.println("  <none>");
+  }
+}
+
+void MyMesh::printNodePosition() {
+  Serial.printf("Position: lat=%.6f lon=%.6f\n", sensors.node_lat, sensors.node_lon);
+  Serial.printf("GPS: %s interval=%us\n",
+                _prefs.gps_enabled ? "on" : "off",
+                (unsigned int)_prefs.gps_interval);
+}
+
+void MyMesh::loadScopeCache() {
+  if (!_store) return;
+
+  File file = _store->openRead(SCOPE_CACHE_FILE);
+  if (!file) return;
+  char line[SCOPE_NAME_SIZE];
+  while (readTextLine(file, line, sizeof(line))) {
+    rememberScopeName(line, "cache", true);
+  }
+  file.close();
+}
+
+bool MyMesh::saveScopeCache() {
+  if (!_store) return false;
+
+  File file = _store->openWriteFile(SCOPE_CACHE_FILE);
+  if (!file) return false;
+  for (uint8_t i = 0; i < SCOPE_CACHE_SIZE; i++) {
+    if (scope_cache[i].name[0] == 0) continue;
+    if ((scope_cache[i].flags & SCOPE_FLAG_DISCOVERED) == 0) continue;
+    file.print(scope_cache[i].name);
+    file.print('\n');
+  }
+  file.close();
+  return true;
 }
 
 void MyMesh::onContactPathUpdated(const ContactInfo &contact) {
@@ -1432,6 +1864,16 @@ bool MyMesh::filterRecvFloodPacket(mesh::Packet* packet) {
 
 bool MyMesh::allowPacketForward(const mesh::Packet* packet) {
   return _prefs.client_repeat != 0;
+}
+
+bool MyMesh::setPacketForwardEnabled(bool enabled) {
+  if (enabled) {
+    uint32_t freq_khz = (uint32_t)round(_prefs.freq * 1000.0f);
+    if (!isValidClientRepeatFreq(freq_khz)) return false;
+  }
+  _prefs.client_repeat = enabled ? 1 : 0;
+  savePrefs();
+  return true;
 }
 
 void MyMesh::sendFloodScoped(const TransportKey& scope, mesh::Packet* pkt, uint32_t delay_millis) {
@@ -1634,7 +2076,9 @@ void MyMesh::onContactResponse(const ContactInfo &contact, const uint8_t *data, 
   uint32_t tag;
   memcpy(&tag, data, 4);
 
-  if (pending_login && memcmp(&pending_login, contact.id.pub_key, 4) == 0) { // check for login response
+  if (ingestPositionTrackResponse(contact, data, len)) {
+    return;
+  } else if (pending_login && memcmp(&pending_login, contact.id.pub_key, 4) == 0) { // check for login response
     // yes, is response to pending sendLogin()
     pending_login = 0;
 
@@ -1884,6 +2328,33 @@ MyMesh::MyMesh(mesh::Radio &radio, mesh::RNG &rng, mesh::RTCClock &rtc, SimpleMe
   scope_response_count = 0;
   scope_discover_response_count = 0;
   scope_empty_response_count = 0;
+  pending_position_track = 0;
+  memset(position_track_pubkey, 0, sizeof(position_track_pubkey));
+  position_track_name[0] = 0;
+  position_track_started_at = 0;
+  position_track_until = 0;
+  position_track_next_req = 0;
+  position_track_last_fix_at = 0;
+  position_track_last_resp_utc = 0;
+  position_track_duration_min = 0;
+  position_track_active = false;
+  position_track_waiting = false;
+  position_track_has_position = false;
+  position_track_has_error = false;
+  position_track_ref_is_live_gps = false;
+  position_track_last_sent_flood = false;
+  position_track_twice_mode = false;
+  position_track_req_count = 0;
+  position_track_resp_count = 0;
+  position_track_no_gps_count = 0;
+  position_track_last_resp_len = 0;
+  position_track_hop_count = OUT_PATH_UNKNOWN;
+  position_track_distance_m = 0;
+  position_track_bearing_deg = 0;
+  position_track_lat = 0;
+  position_track_lon = 0;
+  position_track_ref_lat = 0;
+  position_track_ref_lon = 0;
   resetQuickMessages();
 
   // defaults
@@ -1980,6 +2451,7 @@ void MyMesh::begin(bool has_display) {
   addChannel("Public", PUBLIC_GROUP_PSK); // pre-configure Andy's public channel
   _store->loadChannels(this);
   loadQuickMessages();
+  loadScopeCache();
 
   radio_set_params(_prefs.freq, _prefs.bw, _prefs.sf, _prefs.cr);
   radio_set_tx_power(_prefs.tx_power_dbm);
@@ -2003,9 +2475,9 @@ struct FreqRange {
 };
 
 static FreqRange repeat_freq_ranges[] = {
-  { 433000, 433000 },
-  { 869000, 869000 },
-  { 918000, 918000 }
+  { 433000, 435000 },
+  { 869000, 870000 },
+  { 918000, 919000 }
 };
 
 bool MyMesh::isValidClientRepeatFreq(uint32_t f) const {
@@ -3019,6 +3491,10 @@ void MyMesh::checkCLIRescueCmd() {
       }
     } else if (strcmp(cli_command, "qm.list") == 0) {
       printQuickMessages();
+    } else if (strcmp(cli_command, "fav.list") == 0) {
+      printFavouriteChatContacts();
+    } else if (strcmp(cli_command, "pos.show") == 0) {
+      printNodePosition();
     } else if (memcmp(cli_command, "qm.set ", 7) == 0) {
       char* cursor = &cli_command[7];
       int slot = atoi(cursor);
@@ -3056,6 +3532,8 @@ void MyMesh::checkCLIRescueCmd() {
     } else if (strcmp(cli_command, "help") == 0 || strcmp(cli_command, "?") == 0) {
       Serial.println("Commands:");
       Serial.println("  qm.list");
+      Serial.println("  fav.list");
+      Serial.println("  pos.show");
       Serial.printf("  qm.set <1-%u> <text>\n", (unsigned int)QUICK_MESSAGE_SLOTS);
       Serial.printf("  qm.clear <1-%u>\n", (unsigned int)QUICK_MESSAGE_SLOTS);
       Serial.println("  qm.reset");
@@ -3242,6 +3720,8 @@ void MyMesh::loop() {
 
   checkCLIRescueCmd();
   if (!_cli_rescue) checkSerialInterface();
+
+  pollPositionTrack();
 
   // is there are pending dirty contacts write needed?
   if (dirty_contacts_expiry && millisHasNowPassed(dirty_contacts_expiry)) {

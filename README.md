@@ -15,7 +15,7 @@ aus.
 ## Highlights
 
 - Live-Observer fuer MeshCore RX-Aktivitaet, Pfade, letzte Hops und SNR
-- E-Ink UI mit Status, Paths, Heards, Heatstrip, Load, Savepoints und MQTT
+- E-Ink UI mit Status, Paths, Heards, Heatstrip, Load, Savepoints, Scopes und MQTT
 - Savepoints im SPIFFS-Flash fuer reproduzierbare Standort- und Antennentests
 - Bedienung per Taste, serieller CLI oder MeshCore-Client
 - Optionaler Field-Web-AP unter `http://192.168.4.1/`
@@ -55,7 +55,7 @@ Das WP nimmt Admin-CLI-Kommandos auch ueber den MeshCore-Client entgegen. Das
 ist im Feld oft der angenehmste Weg, weil kein USB-Kabel noetig ist.
 
 ```text
-wp.help
+help
 diag
 ap.on
 ap.status
@@ -63,6 +63,20 @@ ap.off
 view.on
 view.status
 view.off
+remote.on
+remote.status
+remote.off
+show.status
+show.paths
+show.heards
+show.heatstrip
+show.load
+show.savepoints
+show.scopes
+show.mqtt
+show.next
+show.prev
+show.refresh
 mqtt.on
 mqtt.status
 mqtt.off
@@ -75,8 +89,13 @@ discover.neighbors
 ```
 
 Langformen wie `web.ap on`, `web.view status` und `mqtt status` bleiben
-weiterhin gueltig. `screen.dump` ist bewusst nur seriell sinnvoll, weil es
-Bilddaten ausgibt.
+weiterhin gueltig. `?`, `wp.help` und `help wp` sind Aliases fuer `help`.
+`screen.dump` ist bewusst nur seriell sinnvoll, weil es Bilddaten ausgibt.
+
+`remote.on` verlaengert die Display-Wachzeit fuer Bedienung aus dem
+MeshCore-Client. `show.*` springt direkt auf den jeweiligen E-Ink-Screen und
+ersetzt damit die Tasten-Navigation am Geraet. Detailhilfen gibt es mit
+`help show` und `help sp`.
 
 ## Hardware
 
@@ -417,7 +436,7 @@ Danach die Werte in `platformio.local.ini` anpassen. Diese Datei ist in
 
 ## Tastenbedienung
 
-- Kurzer Klick: Status-Screen, Pfad-Screen, Heards-Screen, Heatstrip-Screen, Load-Screen, Savepoints-Screen und MQTT-Screen durchschalten
+- Kurzer Klick: Status-Screen, Pfad-Screen, Heards-Screen, Heatstrip-Screen, Load-Screen, Savepoints-Screen, Scope-Screen und MQTT-Screen durchschalten
 - Doppelklick auf Pfad- oder Heards-Screen: direkt zwischen diesen beiden Screens wechseln
 - Doppelklick auf Heatstrip-Screen: Heatstrip-Snapshot aktualisieren
 - Doppelklick auf Savepoints-Screen: Savepoint speichern

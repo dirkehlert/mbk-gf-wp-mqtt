@@ -80,8 +80,8 @@ class ObserverWebApiTests(unittest.TestCase):
         self.assertNotIn("request->send(403", sp_route)
 
     def test_web_header_refreshes_status_and_monitor(self) -> None:
-        self.assertIn("setInterval(refresh,10000)", self.mymesh)
-        self.assertIn("setInterval(refreshMonitor,10000)", self.mymesh)
+        self.assertIn("setInterval(refreshAll,15000)", self.mymesh)
+        self.assertIn("setInterval(monitorTick,60000)", self.mymesh)
         self.assertIn('id="nodeTime"', self.mymesh)
 
     def test_mqtt_screen_has_ap_and_view_mode_controls(self) -> None:

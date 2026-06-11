@@ -125,20 +125,15 @@ class HomeScreen : public UIScreen {
     FIRST,
     SEND,
     RECENT,
-    RADIO,
     HEATSTRIP,
-    HEARDS,
-    SCOPES,
+    POSITIONS,
     LOAD,
-    BLUETOOTH,
-    ADVERT,
 #if ENV_INCLUDE_GPS == 1
     GPS,
 #endif
 #if UI_SENSORS_PAGE == 1
     SENSORS,
 #endif
-    SHUTDOWN,
     Count    // keep as last
   };
 
@@ -148,25 +143,65 @@ class HomeScreen : public UIScreen {
   NodePrefs* _node_prefs;
   uint8_t _page;
   bool _shutdown_init;
+  bool reset_confirm = false;
   AdvertPath recent[UI_RECENT_LIST_SIZE];
   ScopeInfo scopes[UI_RECENT_LIST_SIZE];
+  static const uint8_t TRACK_FAVS = 16;
+  static const uint8_t POSITION_NODES = 12;
+  FavouriteChatContact favourite_chats[TRACK_FAVS];
+  FavouritePositionInfo favourite_positions[POSITION_NODES];
+  uint8_t position_count = 0;
+  uint8_t position_idx = 0;
+  bool track_panel_open = false;
+  bool actions_panel_open = false;
+  uint8_t action_idx = 0;
+  uint8_t load_panel = 0;
 
   static const uint8_t HEAT_ROWS = 6;
   static const uint8_t HEAT_PATHS = 8;
   static const uint8_t SEND_TARGETS = 48;
   static const uint8_t SEND_MESSAGES = 10; // nine editable messages plus GPS position
+  static const uint8_t SEND_SCOPES = 16; // default plus discovered scope names
+  static const uint8_t TRACK_DURATIONS = 5;
+  static const uint8_t ACTION_COUNT = 4;
 
   enum SendMode {
     SEND_MODE_NAV,
     SEND_MODE_TARGET,
-    SEND_MODE_MESSAGE
+    SEND_MODE_MESSAGE,
+    SEND_MODE_SCOPE
   };
 
   QuickSendTarget send_targets[SEND_TARGETS];
+  ScopeInfo send_scopes[SEND_SCOPES - 1];
   uint8_t send_target_count = 0;
   uint8_t send_target_idx = 0;
   uint8_t send_msg_idx = 0;
+  uint8_t send_scope_count = 1;
+  uint8_t send_scope_idx = 0;
+  uint8_t send_scope_draft_idx = 0;
+  char send_scope_name[SCOPE_NAME_SIZE] = "";
   SendMode send_mode = SEND_MODE_NAV;
+
+  enum TrackMode {
+    TRACK_MODE_NAV,
+    TRACK_MODE_CONTACT,
+    TRACK_MODE_DURATION
+  };
+
+  TrackMode track_mode = TRACK_MODE_NAV;
+  uint8_t track_fav_count = 0;
+  uint8_t track_fav_idx = 0;
+  uint8_t track_duration_idx = 0;
+  const uint16_t track_durations[TRACK_DURATIONS] = { 0, 5, 15, 30, 60 };
+
+  bool isCompact(DisplayDriver& display) const {
+    return display.height() <= 64;
+  }
+
+  int contentTop(DisplayDriver& display) const {
+    return isCompact(display) ? 12 : 20;
+  }
 
   uint8_t getGpsMessageIndex() const {
     return the_mesh.getQuickMessageCount();
@@ -343,17 +378,18 @@ class HomeScreen : public UIScreen {
 
     display.setColor(DisplayDriver::GREEN);
     display.setTextSize(1);
-    display.setCursor(0, 20);
+    int top = contentTop(display);
+    display.setCursor(0, top);
     display.print("Load");
     display.setColor(DisplayDriver::LIGHT);
     char line[48];
     snprintf(line, sizeof(line), "Now %s Max %s", now_pct, max_pct);
-    display.drawTextEllipsized(0, 32, display.width(), line);
+    display.drawTextEllipsized(0, top + 12, display.width(), line);
     snprintf(line, sizeof(line), "Avg %s / airtime", avg_pct);
-    display.drawTextEllipsized(0, 43, display.width(), line);
+    display.drawTextEllipsized(0, top + 23, display.width(), line);
 
-    const int chart_top = 58;
-    const int chart_bottom = 94;
+    const int chart_top = isCompact(display) ? top + 34 : 58;
+    const int chart_bottom = isCompact(display) ? display.height() - 2 : 94;
     const int chart_h = chart_bottom - chart_top;
     const int chart_w = display.width() - 2;
     const int gap = 2;
@@ -370,6 +406,364 @@ class HomeScreen : public UIScreen {
     display.fillRect(0, chart_top, 1, chart_h + 1);
   }
 
+  void refreshFavouriteChats() {
+    track_fav_count = the_mesh.getFavouriteChatContacts(favourite_chats, TRACK_FAVS);
+    if (track_fav_count == 0) {
+      track_fav_idx = 0;
+    } else if (track_fav_idx >= track_fav_count) {
+      track_fav_idx = track_fav_count - 1;
+    }
+  }
+
+  const char* bearingLabel(uint16_t bearing) const {
+    static const char* dirs[] = { "N", "NE", "E", "SE", "S", "SW", "W", "NW" };
+    return dirs[((bearing + 22) % 360) / 45];
+  }
+
+  void formatDistance(char* dest, size_t dest_size, float meters) const {
+    if (meters < 1000.0f) {
+      snprintf(dest, dest_size, "%.0fm", meters);
+    } else {
+      snprintf(dest, dest_size, "%.2fkm", meters / 1000.0f);
+    }
+  }
+
+  void formatUtc(char* dest, size_t dest_size, uint32_t utc) const {
+    if (utc == 0) {
+      snprintf(dest, dest_size, "--:--:--");
+      return;
+    }
+    uint32_t secs = utc % 86400UL;
+    snprintf(dest, dest_size, "%02lu:%02lu:%02lu",
+             (unsigned long)(secs / 3600UL),
+             (unsigned long)((secs / 60UL) % 60UL),
+             (unsigned long)(secs % 60UL));
+  }
+
+  void renderTrack(DisplayDriver& display) {
+    refreshFavouriteChats();
+
+    display.setTextSize(1);
+    display.setColor(DisplayDriver::GREEN);
+    display.drawTextEllipsized(0, 20, display.width(), "Position track");
+
+    char line[64];
+    if (track_mode == TRACK_MODE_CONTACT) {
+      display.setColor(DisplayDriver::LIGHT);
+      if (track_fav_count == 0) {
+        display.drawTextEllipsized(0, 42, display.width(), "No fav chat contacts");
+      } else {
+        char filtered_name[sizeof(favourite_chats[0].name)];
+        display.translateUTF8ToBlocks(filtered_name, favourite_chats[track_fav_idx].name, sizeof(filtered_name));
+        snprintf(line, sizeof(line), "%u/%u %s",
+                 (unsigned int)track_fav_idx + 1,
+                 (unsigned int)track_fav_count,
+                 filtered_name);
+        display.drawTextEllipsized(0, 42, display.width(), line);
+      }
+      display.setColor(DisplayDriver::GREEN);
+      display.drawTextCentered(display.width() / 2, 78, "click: next");
+      display.drawTextCentered(display.width() / 2, 94, "hold: time");
+      return;
+    }
+
+    if (track_mode == TRACK_MODE_DURATION) {
+      display.setColor(DisplayDriver::LIGHT);
+      if (track_durations[track_duration_idx] == 0) {
+        snprintf(line, sizeof(line), "Duration: twice");
+      } else {
+        snprintf(line, sizeof(line), "Duration: %umin", (unsigned int)track_durations[track_duration_idx]);
+      }
+      display.drawTextEllipsized(0, 42, display.width(), line);
+      display.setColor(DisplayDriver::GREEN);
+      display.drawTextCentered(display.width() / 2, 78, "click: next");
+      display.drawTextCentered(display.width() / 2, 94, "hold: start");
+      return;
+    }
+
+    PositionTrackInfo info;
+    the_mesh.getPositionTrackInfo(info);
+    if (!info.active && !info.has_position) {
+      display.setColor(DisplayDriver::LIGHT);
+      display.drawTextEllipsized(0, 38, display.width(), "hold: select fav");
+      display.drawTextEllipsized(0, 52, display.width(), "tracks every minute");
+      return;
+    }
+
+    char filtered_name[sizeof(info.target_name)];
+    display.translateUTF8ToBlocks(filtered_name, info.target_name, sizeof(filtered_name));
+    if (info.twice_mode) {
+      snprintf(line, sizeof(line), "%s twice %u/2",
+               info.active ? "On" : "Done",
+               (unsigned int)info.resp_count);
+    } else {
+      snprintf(line, sizeof(line), "%s %umin",
+               info.active ? "On" : "Done",
+               (unsigned int)info.remaining_min);
+    }
+    display.drawTextEllipsized(0, 34, display.width(), filtered_name);
+    display.drawTextEllipsized(0, 47, display.width(), line);
+
+    if (info.has_position) {
+      char dist[16];
+      formatDistance(dist, sizeof(dist), info.distance_m);
+      snprintf(line, sizeof(line), "%s %u deg %s",
+               bearingLabel(info.bearing_deg),
+               (unsigned int)info.bearing_deg,
+               dist);
+      display.setColor(DisplayDriver::YELLOW);
+      display.drawTextEllipsized(0, 63, display.width(), line);
+      display.setColor(DisplayDriver::LIGHT);
+      snprintf(line, sizeof(line), "age %us ref:%s",
+               (unsigned int)info.age_secs,
+               info.ref_is_live_gps ? "gps" : "saved");
+      display.drawTextEllipsized(0, 78, display.width(), line);
+      char utc[12];
+      formatUtc(utc, sizeof(utc), info.last_resp_utc);
+      if (info.hop_count == OUT_PATH_UNKNOWN) {
+        snprintf(line, sizeof(line), "utc %s h?", utc);
+      } else {
+        snprintf(line, sizeof(line), "utc %s h%u", utc, (unsigned int)info.hop_count);
+      }
+      display.drawTextEllipsized(0, 91, display.width(), line);
+    } else {
+      display.setColor(info.has_error ? DisplayDriver::RED : DisplayDriver::LIGHT);
+      display.drawTextEllipsized(0, 68, display.width(), info.waiting ? "waiting target..." : "no target position");
+      snprintf(line, sizeof(line), "q%u r%u ng%u %s",
+               (unsigned int)info.req_count,
+               (unsigned int)info.resp_count,
+               (unsigned int)info.no_gps_count,
+               info.last_sent_flood ? "flood" : "direct");
+      display.drawTextEllipsized(0, 82, display.width(), line);
+      if (info.last_resp_len > 0) {
+        char utc[12];
+        formatUtc(utc, sizeof(utc), info.last_resp_utc);
+        if (info.hop_count == OUT_PATH_UNKNOWN) {
+          snprintf(line, sizeof(line), "len %u h? utc %s", (unsigned int)info.last_resp_len, utc);
+        } else {
+          snprintf(line, sizeof(line), "len %u h%u utc %s",
+                   (unsigned int)info.last_resp_len,
+                   (unsigned int)info.hop_count,
+                   utc);
+        }
+        display.drawTextEllipsized(0, 94, display.width(), line);
+      }
+    }
+  }
+
+  void refreshFavouritePositions() {
+    position_count = the_mesh.getFavouritePositions(favourite_positions, POSITION_NODES);
+    if (position_count == 0) {
+      position_idx = 0;
+    } else if (position_idx > position_count) {
+      position_idx = position_count;
+    }
+  }
+
+  void renderPositions(DisplayDriver& display) {
+    refreshFavouritePositions();
+
+    display.setTextSize(1);
+    display.setColor(DisplayDriver::GREEN);
+
+    char line[64];
+    float max_dist = 100.0f;
+    for (uint8_t i = 0; i < position_count; i++) {
+      if (favourite_positions[i].distance_m > max_dist) max_dist = favourite_positions[i].distance_m;
+    }
+    if (position_count == 0) {
+      display.setColor(DisplayDriver::LIGHT);
+      display.drawTextEllipsized(0, 32, display.width(), "No fav positions");
+      display.drawTextEllipsized(0, 46, display.width(), "track or receive adverts");
+      return;
+    }
+
+    bool overview = position_idx == 0;
+    uint8_t selected_idx = overview ? 0 : position_idx - 1;
+    float scale_m = max_dist;
+    if (!overview) {
+      scale_m = favourite_positions[selected_idx].distance_m * 1.25f;
+    }
+    if (scale_m < 100.0f) scale_m = 100.0f;
+    if (overview && scale_m < 1000.0f) scale_m = 1000.0f;
+
+    char scale[16];
+    formatDistance(scale, sizeof(scale), scale_m);
+
+    bool compact = isCompact(display);
+    const int cx = compact ? 36 : display.width() / 2;
+    const int cy = compact ? 35 : 62;
+    const int radius = compact ? 21 : 38;
+    display.setColor(DisplayDriver::DARK);
+    display.drawRect(cx - radius, cy - radius, radius * 2, radius * 2);
+    display.drawRect(cx - (radius * 2 / 3), cy - (radius * 2 / 3), radius * 4 / 3, radius * 4 / 3);
+    display.drawRect(cx - (radius / 3), cy - (radius / 3), radius * 2 / 3, radius * 2 / 3);
+    display.fillRect(cx - 1, cy - 1, 3, 3);
+    if (!compact) display.drawTextCentered(cx, cy - radius - 11, "N");
+
+    for (uint8_t i = 0; i < position_count; i++) {
+      const FavouritePositionInfo& pos = favourite_positions[i];
+      float rel = pos.distance_m / scale_m;
+      if (rel > 1.0f) rel = 1.0f;
+      double rad = ((double)pos.bearing_deg) * 0.017453292519943295;
+      int px = cx + (int)round(sin(rad) * rel * radius);
+      int py = cy - (int)round(cos(rad) * rel * radius);
+      if (px < cx - radius + 2) px = cx - radius + 2;
+      if (px > cx + radius - 2) px = cx + radius - 2;
+      if (py < cy - radius + 2) py = cy - radius + 2;
+      if (py > cy + radius - 2) py = cy + radius - 2;
+
+      bool selected = !overview && i == selected_idx;
+      display.setColor(selected ? DisplayDriver::YELLOW : DisplayDriver::LIGHT);
+      if (pos.source == FAV_POSITION_SOURCE_TRACK) {
+        display.fillRect(px - 2, py - 2, 5, 5);
+      } else if (selected) {
+        display.drawRect(px - 3, py - 3, 7, 7);
+        display.fillRect(px - 1, py - 1, 3, 3);
+      } else {
+        display.drawRect(px - 2, py - 2, 5, 5);
+      }
+    }
+
+    if (overview) {
+      display.setColor(DisplayDriver::YELLOW);
+      snprintf(line, sizeof(line), "Overview %u nodes", (unsigned int)position_count);
+      display.drawTextEllipsized(compact ? 74 : 0, compact ? 18 : 105,
+                                 compact ? display.width() - 74 : display.width(), line);
+      display.setColor(DisplayDriver::LIGHT);
+      display.drawTextEllipsized(compact ? 74 : 86, compact ? 31 : 117,
+                                 display.width() - (compact ? 74 : 86), scale);
+      return;
+    }
+
+    const FavouritePositionInfo& selected = favourite_positions[selected_idx];
+    char name[sizeof(selected.name)];
+    display.translateUTF8ToBlocks(name, selected.name, sizeof(name));
+    char dist[16];
+    formatDistance(dist, sizeof(dist), selected.distance_m);
+    display.setColor(DisplayDriver::YELLOW);
+    snprintf(line, sizeof(line), "%c %s",
+             selected.source == FAV_POSITION_SOURCE_TRACK ? 'T' : 'A',
+             name);
+    display.drawTextEllipsized(compact ? 74 : 0, compact ? 18 : 105,
+                               compact ? display.width() - 74 : display.width(), line);
+    display.setColor(DisplayDriver::LIGHT);
+    snprintf(line, sizeof(line), "%s %s", dist, bearingLabel(selected.bearing_deg));
+    display.drawTextEllipsized(compact ? 74 : 0, compact ? 31 : 117,
+                               compact ? display.width() - 74 : 72, line);
+    display.drawTextEllipsized(compact ? 74 : 86, compact ? 44 : 117,
+                               display.width() - (compact ? 74 : 86), scale);
+  }
+
+  const char* getActionName(uint8_t index) const {
+    switch (index) {
+      case 0: return "Send advert";
+      case 1: return _task->isSerialEnabled() ? "BLE off" : "BLE on";
+      case 2: return the_mesh.isPacketForwardEnabled() ? "Pkt fwd off" : "Pkt fwd on";
+      case 3: return "Hibernate";
+      default: return "";
+    }
+  }
+
+  void renderActions(DisplayDriver& display) {
+    display.setTextSize(1);
+    display.setColor(DisplayDriver::GREEN);
+    int top = contentTop(display);
+    int row_h = isCompact(display) ? 10 : 16;
+    display.drawTextEllipsized(0, top, display.width(), "Actions");
+    display.setColor(DisplayDriver::LIGHT);
+    for (uint8_t i = 0; i < ACTION_COUNT; i++) {
+      char line[40];
+      snprintf(line, sizeof(line), "%c %s", i == action_idx ? '>' : ' ', getActionName(i));
+      display.setColor(i == action_idx ? DisplayDriver::YELLOW : DisplayDriver::LIGHT);
+      display.drawTextEllipsized(0, top + 13 + i * row_h, display.width(), line);
+    }
+  }
+
+  void renderHeardRepeaters(DisplayDriver& display) {
+    char tmp[80];
+    display.setColor(DisplayDriver::GREEN);
+    display.setTextSize(1);
+    int top = contentTop(display);
+    int row_h = isCompact(display) ? 10 : 12;
+    uint8_t max_rows = isCompact(display) ? 4 : 7;
+    display.drawTextEllipsized(0, top, display.width(), "Heard repeaters");
+    display.setColor(DisplayDriver::LIGHT);
+    bool any = false;
+    for (uint8_t i = 0; i < max_rows; i++) {
+      if (the_mesh.getMonitorLastHopLine(i, tmp, sizeof(tmp))) {
+        display.drawTextEllipsized(0, top + 12 + i * row_h, display.width(), tmp);
+        any = true;
+      }
+    }
+    if (!any) display.drawTextEllipsized(0, top + 14, display.width(), "No RX hops");
+  }
+
+  void renderScopes(DisplayDriver& display) {
+    uint8_t count = the_mesh.getScopeInfo(scopes, UI_RECENT_LIST_SIZE);
+    display.setColor(DisplayDriver::GREEN);
+    display.setTextSize(1);
+    int top = contentTop(display);
+    int row_h = isCompact(display) ? 10 : 13;
+    uint8_t max_rows = isCompact(display) ? 4 : UI_RECENT_LIST_SIZE;
+    char header[40];
+    if (isCompact(display)) {
+      snprintf(header, sizeof(header), "Scopes Q:%u R:%u",
+               (unsigned int)the_mesh.getLastScopeScanSent(),
+               (unsigned int)the_mesh.getScopeResponseCount());
+    } else {
+      snprintf(header, sizeof(header), "Scopes D:%u Q:%u R:%u E:%u",
+               (unsigned int)the_mesh.getScopeDiscoverResponseCount(),
+               (unsigned int)the_mesh.getLastScopeScanSent(),
+               (unsigned int)the_mesh.getScopeResponseCount(),
+               (unsigned int)the_mesh.getScopeEmptyResponseCount());
+    }
+    display.drawTextEllipsized(0, top, display.width(), header);
+    display.setColor(DisplayDriver::LIGHT);
+    if (count == 0) {
+      display.drawTextEllipsized(0, top + 14, display.width(), "Longpress to scan");
+    } else {
+      int y = top + 12;
+      for (uint8_t i = 0; i < count && i < max_rows; i++, y += row_h) {
+        char line[64];
+        char filtered_name[sizeof(scopes[i].name)];
+        display.translateUTF8ToBlocks(filtered_name, scopes[i].name, sizeof(filtered_name));
+        snprintf(line, sizeof(line), "%s%s (%lu)",
+                 (scopes[i].flags & SCOPE_FLAG_DISCOVERED) ? "*" : "",
+                 filtered_name,
+                 (unsigned long)scopes[i].rx_count);
+        display.drawTextEllipsized(0, y, display.width(), line);
+      }
+    }
+  }
+
+  void runSelectedAction() {
+    if (action_idx == 0) {
+      _task->notify(UIEventType::ack);
+      _task->showAlert(the_mesh.advert() ? "Advert sent!" : "Advert failed", 1000);
+      actions_panel_open = false;
+    } else if (action_idx == 1) {
+      if (_task->isSerialEnabled()) {
+        _task->disableSerial();
+        _task->showAlert("BLE off", 1000);
+      } else {
+        _task->enableSerial();
+        _task->showAlert("BLE on", 1000);
+      }
+    } else if (action_idx == 2) {
+      bool enable = !the_mesh.isPacketForwardEnabled();
+      bool ok = the_mesh.setPacketForwardEnabled(enable);
+      if (ok) {
+        _task->showAlert(enable ? "Pkt fwd on" : "Pkt fwd off", 1000);
+      } else {
+        _task->showAlert("Freq not allowed", 1000);
+      }
+    } else if (action_idx == 3) {
+      _shutdown_init = true;
+      _task->showAlert("hibernating...", 1000);
+    }
+  }
+
   void refreshSendTargets() {
     send_target_count = the_mesh.getQuickSendTargets(send_targets, SEND_TARGETS);
     if (send_target_count == 0) {
@@ -379,17 +773,73 @@ class HomeScreen : public UIScreen {
     }
   }
 
+  void refreshSendScopes() {
+    send_scope_count = 1 + the_mesh.getScopeInfo(send_scopes, SEND_SCOPES - 1);
+    if (send_scope_count == 0) send_scope_count = 1;
+    send_scope_idx = findSendScopeIndex(send_scope_name);
+    if (send_scope_draft_idx >= send_scope_count) send_scope_draft_idx = send_scope_idx;
+  }
+
+  uint8_t findSendScopeIndex(const char* name) const {
+    if (!name || !name[0]) return 0;
+    for (uint8_t i = 1; i < send_scope_count; i++) {
+      if (strcmp(send_scopes[i - 1].name, name) == 0) return i;
+    }
+    return 0;
+  }
+
+  const char* getSendScopeName(uint8_t scope_idx) const {
+    if (scope_idx == 0) return "Default";
+    uint8_t idx = scope_idx - 1;
+    if (idx >= SEND_SCOPES - 1 || send_scopes[idx].name[0] == 0) return "Default";
+    return send_scopes[idx].name;
+  }
+
+  const char* getSendScopeName() const {
+    return send_scope_name[0] ? send_scope_name : "Default";
+  }
+
+  void applySendScope() {
+    if (send_scope_name[0] == 0) {
+      the_mesh.clearQuickSendScope();
+    } else {
+      the_mesh.setQuickSendScope(send_scope_name);
+    }
+  }
+
   void renderSend(DisplayDriver& display) {
     refreshSendTargets();
+    refreshSendScopes();
 
     display.setTextSize(1);
     display.setColor(DisplayDriver::GREEN);
-    display.setCursor(0, 20);
-    display.print("Send");
+    bool compact = isCompact(display);
+    int top = contentTop(display);
+    display.setCursor(0, top);
+    display.print(send_mode == SEND_MODE_SCOPE ? "Select scope" : "Send");
 
     char line[64];
+    if (send_mode == SEND_MODE_SCOPE) {
+      display.setColor(DisplayDriver::LIGHT);
+      char filtered_scope[SCOPE_NAME_SIZE];
+      display.translateUTF8ToBlocks(filtered_scope, getSendScopeName(send_scope_draft_idx), sizeof(filtered_scope));
+      snprintf(line, sizeof(line), "%u/%u %s",
+               (unsigned int)send_scope_draft_idx + 1,
+               (unsigned int)send_scope_count,
+               filtered_scope);
+      display.drawTextEllipsized(0, compact ? top + 14 : 42, display.width(), line);
+      display.setColor(DisplayDriver::GREEN);
+      display.drawTextCentered(display.width() / 2, compact ? top + 28 : 78, "click: next");
+      if (!compact) display.drawTextCentered(display.width() / 2, 94, "hold: select");
+      return;
+    }
+
     display.setColor(send_mode == SEND_MODE_TARGET ? DisplayDriver::YELLOW : DisplayDriver::LIGHT);
-    display.drawTextEllipsized(0, 33, display.width(), "To");
+    int y_to = compact ? top + 12 : 33;
+    int y_msg = compact ? top + 25 : 52;
+    int y_text = compact ? top + 37 : 64;
+    int y_scope = compact ? top + 49 : 78;
+    display.drawTextEllipsized(0, y_to, display.width(), "To");
     if (send_target_count == 0) {
       snprintf(line, sizeof(line), "-");
     } else {
@@ -400,21 +850,26 @@ class HomeScreen : public UIScreen {
                target.type == QUICK_SEND_CHANNEL ? "#" : "@",
                filtered_name);
     }
-    display.drawTextEllipsized(18, 33, display.width() - 18, line);
+    display.drawTextEllipsized(18, y_to, display.width() - 18, line);
 
     display.setColor(send_mode == SEND_MODE_MESSAGE ? DisplayDriver::YELLOW : DisplayDriver::LIGHT);
     uint8_t send_msg_count = getSendMessageCount();
     if (send_msg_idx >= send_msg_count) send_msg_idx = send_msg_count - 1;
     snprintf(line, sizeof(line), "Msg %u/%u", (unsigned int)send_msg_idx + 1, (unsigned int)send_msg_count);
-    display.drawTextEllipsized(0, 52, display.width(), line);
+    display.drawTextEllipsized(0, y_msg, display.width(), line);
     display.setColor(DisplayDriver::LIGHT);
-    display.drawTextEllipsized(0, 66, display.width(), getSendMessage(send_msg_idx));
+    display.drawTextEllipsized(0, y_text, display.width(), getSendMessage(send_msg_idx));
+
+    char filtered_scope[SCOPE_NAME_SIZE];
+    display.translateUTF8ToBlocks(filtered_scope, getSendScopeName(), sizeof(filtered_scope));
+    snprintf(line, sizeof(line), "Scope: %s", filtered_scope);
+    display.drawTextEllipsized(0, y_scope, display.width(), line);
 
     display.setColor(DisplayDriver::GREEN);
     const char* action = "hold: target";
     if (send_mode == SEND_MODE_TARGET) action = "hold: msg";
     else if (send_mode == SEND_MODE_MESSAGE) action = "hold: send";
-    display.drawTextCentered(display.width() / 2, 86, action);
+    if (!compact) display.drawTextCentered(display.width() / 2, 96, action);
   }
 
 
@@ -432,9 +887,9 @@ class HomeScreen : public UIScreen {
     if (batteryPercentage < 0) batteryPercentage = 0; // Clamp to 0%
     if (batteryPercentage > 100) batteryPercentage = 100; // Clamp to 100%
 
-    // battery icon
-    int iconWidth = 24;
-    int iconHeight = 10;
+    bool compact = isCompact(display);
+    int iconWidth = compact ? 16 : 24;
+    int iconHeight = compact ? 7 : 10;
     int iconX = display.width() - iconWidth - 5; // Position the icon near the top-right corner
     int iconY = 0;
     display.setColor(DisplayDriver::GREEN);
@@ -443,7 +898,7 @@ class HomeScreen : public UIScreen {
     display.drawRect(iconX, iconY, iconWidth, iconHeight);
 
     // battery "cap"
-    display.fillRect(iconX + iconWidth, iconY + (iconHeight / 4), 3, iconHeight / 2);
+    display.fillRect(iconX + iconWidth, iconY + (iconHeight / 4), compact ? 2 : 3, iconHeight / 2);
 
     // fill the battery based on the percentage
     int fillWidth = (batteryPercentage * (iconWidth - 4)) / 100;
@@ -498,21 +953,22 @@ public:
 
   int render(DisplayDriver& display) override {
     char tmp[80];
+    bool compact = isCompact(display);
     // node name
     display.setTextSize(1);
     display.setColor(DisplayDriver::GREEN);
     char filtered_name[sizeof(_node_prefs->node_name)];
     display.translateUTF8ToBlocks(filtered_name, _node_prefs->node_name, sizeof(filtered_name));
-    display.setCursor(0, 0);
-    display.print(filtered_name);
+    display.drawTextEllipsized(0, 0, compact ? display.width() - 26 : display.width() - 34, filtered_name);
 
     // battery voltage
     renderBatteryIndicator(display, _task->getBattMilliVolts());
 
     // curr page indicator
-    int y = 14;
-    int x = display.width() / 2 - 5 * (HomePage::Count-1);
-    for (uint8_t i = 0; i < HomePage::Count; i++, x += 10) {
+    int y = compact ? 9 : 14;
+    int x = display.width() / 2 - (compact ? 4 : 5) * (HomePage::Count-1);
+    int dot_step = compact ? 8 : 10;
+    for (uint8_t i = 0; i < HomePage::Count; i++, x += dot_step) {
       if (i == _page) {
         display.fillRect(x-1, y-1, 3, 3);
       } else {
@@ -521,27 +977,44 @@ public:
     }
 
     if (_page == HomePage::FIRST) {
-      display.setColor(DisplayDriver::YELLOW);
-      display.setTextSize(2);
-      sprintf(tmp, "MSG: %d", _task->getMsgCount());
-      display.drawTextCentered(display.width() / 2, 20, tmp);
+      if (actions_panel_open) {
+        renderActions(display);
+      } else {
+        display.setColor(DisplayDriver::YELLOW);
+        display.setTextSize(compact ? 1 : 2);
+        sprintf(tmp, "MSG: %d", _task->getMsgCount());
+        display.drawTextCentered(display.width() / 2, compact ? 13 : 20, tmp);
 
-      #ifdef WIFI_SSID
-        IPAddress ip = WiFi.localIP();
-        snprintf(tmp, sizeof(tmp), "IP: %d.%d.%d.%d", ip[0], ip[1], ip[2], ip[3]);
-        display.setTextSize(1);
-        display.drawTextCentered(display.width() / 2, 54, tmp); 
-      #endif
-      if (_task->hasConnection()) {
-        display.setColor(DisplayDriver::GREEN);
-        display.setTextSize(1);
-        display.drawTextCentered(display.width() / 2, 43, "< Connected >");
+        #ifdef WIFI_SSID
+          IPAddress ip = WiFi.localIP();
+          snprintf(tmp, sizeof(tmp), "IP: %d.%d.%d.%d", ip[0], ip[1], ip[2], ip[3]);
+          display.setTextSize(1);
+          display.drawTextCentered(display.width() / 2, compact ? 24 : 54, tmp);
+        #endif
+        if (_task->hasConnection()) {
+          display.setColor(DisplayDriver::GREEN);
+          display.setTextSize(1);
+          display.drawTextCentered(display.width() / 2, compact ? 24 : 43, "< Connected >");
 
-      } else if (the_mesh.getBLEPin() != 0) { // BT pin
-        display.setColor(DisplayDriver::RED);
-        display.setTextSize(2);
-        sprintf(tmp, "Pin:%d", the_mesh.getBLEPin());
-        display.drawTextCentered(display.width() / 2, 43, tmp);
+        } else if (the_mesh.getBLEPin() != 0) { // BT pin
+          display.setColor(DisplayDriver::RED);
+          display.setTextSize(compact ? 1 : 2);
+          sprintf(tmp, "Pin:%d", the_mesh.getBLEPin());
+          display.drawTextCentered(display.width() / 2, compact ? 24 : 43, tmp);
+        }
+        display.setTextSize(1);
+        display.setColor(DisplayDriver::LIGHT);
+        snprintf(tmp, sizeof(tmp), "Noise floor: %d", radio_driver.getNoiseFloor());
+        display.drawTextEllipsized(0, compact ? 34 : 62, display.width(), tmp);
+        snprintf(tmp, sizeof(tmp), "RX: %lu  SNR: %.1f",
+                 (unsigned long)the_mesh.getMonitorRxPackets(), the_mesh.getMonitorLastSnr());
+        display.drawTextEllipsized(0, compact ? 45 : 74, display.width(), tmp);
+        if (!compact) display.drawTextEllipsized(0, 88, display.width(), "Last path:");
+        if (the_mesh.getMonitorLatestPathLine(tmp, sizeof(tmp))) {
+          display.drawTextEllipsized(0, compact ? 56 : 100, display.width(), tmp);
+        } else {
+          display.drawTextEllipsized(0, compact ? 56 : 100, display.width(), "-");
+        }
       }
     } else if (_page == HomePage::SEND) {
       renderSend(display);
@@ -570,92 +1043,22 @@ public:
         display.setCursor(display.width() - timestamp_width - 1, y);
         display.print(tmp);
       }
-    } else if (_page == HomePage::RADIO) {
-      display.setColor(DisplayDriver::YELLOW);
-      display.setTextSize(1);
-      // freq / sf
-      display.setCursor(0, 20);
-      sprintf(tmp, "FQ: %06.3f   SF: %d", _node_prefs->freq, _node_prefs->sf);
-      display.print(tmp);
-
-      display.setCursor(0, 31);
-      sprintf(tmp, "BW: %03.2f     CR: %d", _node_prefs->bw, _node_prefs->cr);
-      display.print(tmp);
-
-      // tx power,  noise floor
-      display.setCursor(0, 42);
-      sprintf(tmp, "TX: %ddBm", _node_prefs->tx_power_dbm);
-      display.print(tmp);
-      display.setCursor(0, 53);
-      sprintf(tmp, "Noise floor: %d", radio_driver.getNoiseFloor());
-      display.print(tmp);
-      display.setCursor(0, 64);
-      sprintf(tmp, "RX: %lu  SNR: %.1f",
-              (unsigned long)the_mesh.getMonitorRxPackets(), the_mesh.getMonitorLastSnr());
-      display.print(tmp);
-      display.setCursor(0, 75);
-      display.print("Last path:");
-      if (the_mesh.getMonitorLatestPathLine(tmp, sizeof(tmp))) {
-        display.drawTextEllipsized(0, 86, display.width(), tmp);
-      } else {
-        display.setCursor(0, 86);
-        display.print("-");
-      }
     } else if (_page == HomePage::HEATSTRIP) {
       renderHeatstrip(display);
-    } else if (_page == HomePage::HEARDS) {
-      display.setColor(DisplayDriver::GREEN);
-      display.setTextSize(1);
-      display.setCursor(0, 20);
-      display.print("Heard repeaters");
-      display.setColor(DisplayDriver::LIGHT);
-      bool any = false;
-      for (uint8_t i = 0; i < 7; i++) {
-        if (the_mesh.getMonitorLastHopLine(i, tmp, sizeof(tmp))) {
-          display.drawTextEllipsized(0, 34 + i * 12, display.width(), tmp);
-          any = true;
-        }
-      }
-      if (!any) display.drawTextEllipsized(0, 36, display.width(), "No RX hops");
-    } else if (_page == HomePage::SCOPES) {
-      uint8_t count = the_mesh.getScopeInfo(scopes, UI_RECENT_LIST_SIZE);
-      display.setColor(DisplayDriver::GREEN);
-      display.setTextSize(1);
-      display.setCursor(0, 20);
-      char header[40];
-      snprintf(header, sizeof(header), "Scopes D:%u Q:%u R:%u E:%u",
-               (unsigned int)the_mesh.getScopeDiscoverResponseCount(),
-               (unsigned int)the_mesh.getLastScopeScanSent(),
-               (unsigned int)the_mesh.getScopeResponseCount(),
-               (unsigned int)the_mesh.getScopeEmptyResponseCount());
-      display.drawTextEllipsized(0, 20, display.width(), header);
-      display.setColor(DisplayDriver::LIGHT);
-      if (count == 0) {
-        display.drawTextEllipsized(0, 36, display.width(), "Doubleclick to scan");
+    } else if (_page == HomePage::POSITIONS) {
+      if (track_panel_open) {
+        renderTrack(display);
       } else {
-        int y = 34;
-        for (uint8_t i = 0; i < count; i++, y += 13) {
-          char line[64];
-          char filtered_name[sizeof(scopes[i].name)];
-          display.translateUTF8ToBlocks(filtered_name, scopes[i].name, sizeof(filtered_name));
-          snprintf(line, sizeof(line), "%s (%lu)", filtered_name,
-                   (unsigned long)scopes[i].rx_count);
-          display.drawTextEllipsized(0, y, display.width(), line);
-        }
+        renderPositions(display);
       }
     } else if (_page == HomePage::LOAD) {
-      renderLoad(display);
-    } else if (_page == HomePage::BLUETOOTH) {
-      display.setColor(DisplayDriver::GREEN);
-      display.drawXbm((display.width() - 32) / 2, 18,
-          _task->isSerialEnabled() ? bluetooth_on : bluetooth_off,
-          32, 32);
-      display.setTextSize(1);
-      display.drawTextCentered(display.width() / 2, 64 - 11, "toggle: " PRESS_LABEL);
-    } else if (_page == HomePage::ADVERT) {
-      display.setColor(DisplayDriver::GREEN);
-      display.drawXbm((display.width() - 32) / 2, 18, advert_icon, 32, 32);
-      display.drawTextCentered(display.width() / 2, 64 - 11, "advert: " PRESS_LABEL);
+      if (load_panel == 0) {
+        renderLoad(display);
+      } else if (load_panel == 1) {
+        renderHeardRepeaters(display);
+      } else {
+        renderScopes(display);
+      }
 #if ENV_INCLUDE_GPS == 1
     } else if (_page == HomePage::GPS) {
       LocationProvider* nmea = sensors.getLocationProvider();
@@ -805,20 +1208,40 @@ public:
       if (sensors_scroll) sensors_scroll_offset = (sensors_scroll_offset+1)%sensors_nb;
       else sensors_scroll_offset = 0;
 #endif
-    } else if (_page == HomePage::SHUTDOWN) {
-      display.setColor(DisplayDriver::GREEN);
-      display.setTextSize(1);
-      if (_shutdown_init) {
-        display.drawTextCentered(display.width() / 2, 34, "hibernating...");
-      } else {
-        display.drawXbm((display.width() - 32) / 2, 18, power_icon, 32, 32);
-        display.drawTextCentered(display.width() / 2, 64 - 11, "hibernate:" PRESS_LABEL);
-      }
+    }
+    if (_page == HomePage::POSITIONS && track_panel_open) {
+      PositionTrackInfo info;
+      if (the_mesh.getPositionTrackInfo(info) && info.active) return 10000;
+      return 3000;
+    }
+    if (_page == HomePage::POSITIONS) {
+      return 10000;
+    }
+    if (_page == HomePage::FIRST) {
+      return 30000;
     }
     return 5000;   // next render after 5000 ms
   }
 
   bool handleInput(char c) override {
+    if (_page == HomePage::FIRST && actions_panel_open) {
+      if (c == KEY_PREV || c == KEY_SELECT) {
+        actions_panel_open = false;
+        return true;
+      }
+      if (c == KEY_CONTEXT_MENU || c == KEY_NEXT || c == KEY_RIGHT) {
+        action_idx = (action_idx + 1) % ACTION_COUNT;
+        return true;
+      }
+      if (c == KEY_LEFT) {
+        action_idx = (action_idx + ACTION_COUNT - 1) % ACTION_COUNT;
+        return true;
+      }
+      if (c == KEY_ENTER) {
+        runSelectedAction();
+        return true;
+      }
+    }
     if (c == KEY_ENTER && _page == HomePage::FIRST) {
       if (_task->getMsgCount() > 0) {
         _task->gotoMsgPreviewScreen();
@@ -839,6 +1262,8 @@ public:
         } else if (send_mode == SEND_MODE_MESSAGE) {
           uint8_t count = getSendMessageCount();
           send_msg_idx = (send_msg_idx + count - 1) % count;
+        } else if (send_mode == SEND_MODE_SCOPE) {
+          send_scope_draft_idx = (send_scope_draft_idx + send_scope_count - 1) % send_scope_count;
         }
         return true;
       }
@@ -847,6 +1272,74 @@ public:
           send_target_idx = (send_target_idx + 1) % send_target_count;
         } else if (send_mode == SEND_MODE_MESSAGE) {
           send_msg_idx = (send_msg_idx + 1) % getSendMessageCount();
+        } else if (send_mode == SEND_MODE_SCOPE) {
+          send_scope_draft_idx = (send_scope_draft_idx + 1) % send_scope_count;
+        }
+        return true;
+      }
+      if (c == KEY_ENTER && send_mode == SEND_MODE_SCOPE) {
+        send_scope_idx = send_scope_draft_idx;
+        if (send_scope_idx == 0) {
+          send_scope_name[0] = 0;
+        } else {
+          StrHelper::strncpy(send_scope_name, getSendScopeName(send_scope_idx), sizeof(send_scope_name));
+        }
+        applySendScope();
+        send_mode = SEND_MODE_NAV;
+        char label[40];
+        snprintf(label, sizeof(label), "Scope: %s", getSendScopeName());
+        _task->showAlert(label, 1000);
+        return true;
+      }
+      if (c == KEY_CONTEXT_MENU && send_mode == SEND_MODE_SCOPE) {
+        send_scope_draft_idx = (send_scope_draft_idx + 1) % send_scope_count;
+        return true;
+      }
+      if (c == KEY_CONTEXT_MENU) {
+        if (send_mode == SEND_MODE_TARGET && send_target_count > 0) {
+          send_target_idx = (send_target_idx + 1) % send_target_count;
+        } else if (send_mode == SEND_MODE_MESSAGE) {
+          send_msg_idx = (send_msg_idx + 1) % getSendMessageCount();
+        }
+        return true;
+      }
+    }
+    if (_page == HomePage::POSITIONS && track_panel_open && track_mode != TRACK_MODE_NAV) {
+      if (c == KEY_PREV || c == KEY_SELECT) {
+        track_mode = TRACK_MODE_NAV;
+        track_panel_open = false;
+        return true;
+      }
+      if (c == KEY_LEFT) {
+        if (track_mode == TRACK_MODE_CONTACT && track_fav_count > 0) {
+          track_fav_idx = (track_fav_idx + track_fav_count - 1) % track_fav_count;
+        } else if (track_mode == TRACK_MODE_DURATION) {
+          track_duration_idx = (track_duration_idx + TRACK_DURATIONS - 1) % TRACK_DURATIONS;
+        }
+        return true;
+      }
+      if (c == KEY_NEXT || c == KEY_RIGHT || c == KEY_CONTEXT_MENU) {
+        if (track_mode == TRACK_MODE_CONTACT && track_fav_count > 0) {
+          track_fav_idx = (track_fav_idx + 1) % track_fav_count;
+        } else if (track_mode == TRACK_MODE_DURATION) {
+          track_duration_idx = (track_duration_idx + 1) % TRACK_DURATIONS;
+        }
+        return true;
+      }
+      if (c == KEY_ENTER) {
+        if (track_mode == TRACK_MODE_CONTACT) {
+          if (track_fav_count == 0) {
+            track_mode = TRACK_MODE_NAV;
+            _task->showAlert("No favorites", 1000);
+          } else {
+            track_mode = TRACK_MODE_DURATION;
+          }
+        } else if (track_mode == TRACK_MODE_DURATION) {
+          bool started = the_mesh.startPositionTrack(favourite_chats[track_fav_idx].pubkey_prefix,
+                                                     sizeof(favourite_chats[track_fav_idx].pubkey_prefix),
+                                                     track_durations[track_duration_idx]);
+          track_mode = TRACK_MODE_NAV;
+          _task->showAlert(started ? "Tracking started" : "Track failed", 1000);
         }
         return true;
       }
@@ -854,11 +1347,21 @@ public:
     if (c == KEY_LEFT || c == KEY_PREV) {
       _page = (_page + HomePage::Count - 1) % HomePage::Count;
       send_mode = SEND_MODE_NAV;
+      track_mode = TRACK_MODE_NAV;
+      track_panel_open = false;
+      actions_panel_open = false;
+      load_panel = 0;
+      reset_confirm = false;
       return true;
     }
     if (c == KEY_NEXT || c == KEY_RIGHT) {
       _page = (_page + 1) % HomePage::Count;
       send_mode = SEND_MODE_NAV;
+      track_mode = TRACK_MODE_NAV;
+      track_panel_open = false;
+      actions_panel_open = false;
+      load_panel = 0;
+      reset_confirm = false;
       if (_page == HomePage::RECENT) {
         _task->showAlert("Recent adverts", 800);
       }
@@ -866,6 +1369,7 @@ public:
     }
     if (c == KEY_ENTER && _page == HomePage::SEND) {
       refreshSendTargets();
+      refreshSendScopes();
       if (send_mode == SEND_MODE_NAV) {
         send_mode = SEND_MODE_TARGET;
       } else if (send_mode == SEND_MODE_TARGET) {
@@ -881,6 +1385,7 @@ public:
             return true;
           }
           bool sent_flood = false;
+          applySendScope();
           bool sent = the_mesh.sendQuickText(send_targets[send_target_idx], quick_msg, &sent_flood);
           _task->notify(sent ? UIEventType::ack : UIEventType::none);
           _task->showAlert(sent ? (sent_flood ? "Sent flood" : "Sent") : "Send failed", 1000);
@@ -889,31 +1394,86 @@ public:
       }
       return true;
     }
-    if (c == KEY_CONTEXT_MENU && _page == HomePage::SCOPES) {
-      uint8_t sent = the_mesh.queryNearbyScopes();
-      _task->showAlert(sent ? "Scope scan sent" : "No repeaters", 1000);
+    if (c == KEY_CONTEXT_MENU && _page == HomePage::SEND) {
+      refreshSendScopes();
+      send_scope_draft_idx = findSendScopeIndex(send_scope_name);
+      send_mode = SEND_MODE_SCOPE;
       return true;
     }
-    if (c == KEY_ENTER && _page == HomePage::BLUETOOTH) {
-      if (_task->isSerialEnabled()) {  // toggle Bluetooth on/off
-        _task->disableSerial();
+    if (c == KEY_ENTER && _page == HomePage::POSITIONS && track_panel_open) {
+      PositionTrackInfo info;
+      the_mesh.getPositionTrackInfo(info);
+      if (info.active) {
+        the_mesh.stopPositionTrack();
+        _task->showAlert("Tracking stopped", 1000);
+      } else if (info.has_position || info.target_name[0]) {
+        the_mesh.clearPositionTrackResult();
+        _task->showAlert("Track cleared", 1000);
       } else {
-        _task->enableSerial();
+        refreshFavouriteChats();
+        if (track_fav_count == 0) {
+          _task->showAlert("No favorites", 1000);
+        } else {
+          track_mode = TRACK_MODE_CONTACT;
+        }
       }
       return true;
     }
-    if (c == KEY_ENTER && _page == HomePage::ADVERT) {
-      _task->notify(UIEventType::ack);
-      if (the_mesh.advert()) {
-        _task->showAlert("Advert sent!", 1000);
+    if (c == KEY_CONTEXT_MENU && _page == HomePage::POSITIONS) {
+      if (track_panel_open) return true;
+      refreshFavouritePositions();
+      if (position_count == 0) {
+        _task->showAlert("No positions", 1000);
       } else {
-        _task->showAlert("Advert failed..", 1000);
+        position_idx = (position_idx + 1) % (position_count + 1);
       }
+      return true;
+    }
+    if (c == KEY_ENTER && _page == HomePage::POSITIONS) {
+      track_panel_open = true;
+      track_mode = TRACK_MODE_NAV;
+      return true;
+    }
+    if (c == KEY_ENTER && _page == HomePage::LOAD) {
+      if (load_panel == 2) {
+        uint8_t sent = the_mesh.queryNearbyScopes();
+        _task->showAlert(sent ? "Scope scan sent" : "No repeaters", 1000);
+      } else if (load_panel == 0) {
+        if (!reset_confirm) {
+          reset_confirm = true;
+          _task->showAlert("Reset stats?", 1500);
+        } else {
+          the_mesh.resetMonitorLiveStats();
+          reset_confirm = false;
+          _task->showAlert("Stats reset", 1000);
+        }
+      }
+      return true;
+    }
+    if (c == KEY_CONTEXT_MENU && _page == HomePage::LOAD) {
+      load_panel = (load_panel + 1) % 3;
+      reset_confirm = false;
+      return true;
+    }
+    if (c == KEY_CONTEXT_MENU && _page == HomePage::FIRST) {
+      actions_panel_open = true;
       return true;
     }
 #if ENV_INCLUDE_GPS == 1
     if (c == KEY_ENTER && _page == HomePage::GPS) {
       _task->toggleGPS();
+      return true;
+    }
+    if (c == KEY_CONTEXT_MENU && _page == HomePage::GPS) {
+      LocationProvider* gps = sensors.getLocationProvider();
+      if (gps && gps->isValid()) {
+        sensors.node_lat = ((double)gps->getLatitude()) / 1000000.0;
+        sensors.node_lon = ((double)gps->getLongitude()) / 1000000.0;
+        the_mesh.savePrefs();
+        _task->showAlert("Position saved", 1000);
+      } else {
+        _task->showAlert("No GPS fix", 1000);
+      }
       return true;
     }
 #endif
@@ -924,10 +1484,6 @@ public:
       return true;
     }
 #endif
-    if (c == KEY_ENTER && _page == HomePage::SHUTDOWN) {
-      _shutdown_init = true;  // need to wait for button to be released
-      return true;
-    }
     return false;
   }
 };
@@ -1501,6 +2057,20 @@ void UITask::loop() {
 
   if (curr) curr->poll();
 
+  PositionTrackInfo track_info;
+  bool tracking_active = the_mesh.getPositionTrackInfo(track_info) && track_info.active;
+  if (tracking_active && _display != NULL) {
+    if (!_display->isOn()) {
+      _display->turnOn();
+    }
+    _auto_off = millis() + AUTO_OFF_MILLIS;
+    if (track_info.req_count != _track_req_seen || track_info.resp_count != _track_resp_seen) {
+      _track_req_seen = track_info.req_count;
+      _track_resp_seen = track_info.resp_count;
+      _next_refresh = 0;
+    }
+  }
+
   if (_display != NULL && _display->isOn()) {
     if (millis() >= _next_refresh && curr) {
       _display->startFrame();
@@ -1579,8 +2149,9 @@ char UITask::handleLongPress(char c) {
 
 char UITask::handleDoubleClick(char c) {
   MESH_DEBUG_PRINTLN("UITask: double click triggered");
+  bool was_off = _display != NULL && !_display->isOn();
   checkDisplayOn(c);
-  return KEY_CONTEXT_MENU;
+  return was_off ? 0 : KEY_CONTEXT_MENU;
 }
 
 char UITask::handleTripleClick(char c) {

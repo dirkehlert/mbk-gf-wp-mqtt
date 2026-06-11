@@ -38,6 +38,8 @@
 #endif
 #include "RateLimiter.h"
 
+class UITask;
+
 #if defined(ENABLE_OBSERVER_WEB_AP) && defined(ESP32)
 class AsyncWebServer;
 class AsyncWebServerRequest;
@@ -82,6 +84,8 @@ struct NeighbourInfo {
 #define OBSERVER_PATH_DISPLAY_HOPS 3
 #define OBSERVER_LAST_HOP_HISTORY_SIZE 24
 #define OBSERVER_LAST_HOP_TEXT_SIZE    8
+#define OBSERVER_SCOPE_HISTORY_SIZE    16
+#define OBSERVER_SCOPE_NAME_SIZE       31
 #define OBSERVER_SAVEPOINT_MAX         10
 #define OBSERVER_SAVEPOINT_LINE_SIZE   40
 #ifdef ENABLE_OBSERVER_CLOCK_SYNC
@@ -103,6 +107,13 @@ struct ObserverLastHopInfo {
   int8_t max_snr;
   char text[OBSERVER_LAST_HOP_TEXT_SIZE];
   char key[OBSERVER_LAST_HOP_TEXT_SIZE];
+};
+
+struct ObserverScopeInfo {
+  unsigned long seen_at;
+  uint32_t count;
+  uint16_t code;
+  char name[OBSERVER_SCOPE_NAME_SIZE];
 };
 
 #ifdef ENABLE_OBSERVER_CLOCK_SYNC
@@ -194,8 +205,10 @@ class MyMesh : public mesh::Mesh, public CommonCLICallbacks {
   uint32_t observer_max_flood_ms;
   bool observer_boot_health_started;
   mesh::MainBoard* _board;
+  UITask* _ui_task;
   ObserverPathInfo observer_paths[OBSERVER_PATH_HISTORY_SIZE];
   ObserverLastHopInfo observer_last_hops[OBSERVER_LAST_HOP_HISTORY_SIZE];
+  ObserverScopeInfo observer_scopes[OBSERVER_SCOPE_HISTORY_SIZE];
 #if defined(ESP32)
   mutable portMUX_TYPE observer_lock = portMUX_INITIALIZER_UNLOCKED;
 #endif
@@ -249,6 +262,7 @@ class MyMesh : public mesh::Mesh, public CommonCLICallbacks {
   bool isLooped(const mesh::Packet* packet, const uint8_t max_counters[]);
   void rememberObserverPath(const mesh::Packet* packet);
   void rememberObserverLastHop(const mesh::Packet* packet, int8_t snr_x4);
+  void rememberObserverScope(mesh::Packet* packet);
   void observeClockSyncSample(const mesh::Identity& id, uint32_t timestamp);
 #if defined(ENABLE_OBSERVER_WEB_AP) && defined(ESP32)
   void setupObserverWebRoutes();
@@ -310,6 +324,7 @@ public:
   MyMesh(mesh::MainBoard& board, mesh::Radio& radio, mesh::MillisecondClock& ms, mesh::RNG& rng, mesh::RTCClock& rtc, mesh::MeshTables& tables);
 
   void begin(FILESYSTEM* fs);
+  void setUiTask(UITask* ui_task) { _ui_task = ui_task; }
   void sendNodeDiscoverReq();
   const char* getFirmwareVer() override { return FIRMWARE_VERSION; }
   const char* getBuildDate() override { return FIRMWARE_BUILD_DATE; }
@@ -363,6 +378,7 @@ public:
   bool getObserverPathLine(uint8_t index, char* dest, size_t dest_size) const;
   bool getObserverLatestPathLine(char* dest, size_t dest_size) const;
   bool getObserverLastHopLine(uint8_t index, char* dest, size_t dest_size) const;
+  bool getObserverScopeLine(uint8_t index, char* dest, size_t dest_size) const;
 #ifdef ENABLE_OBSERVER_SAVEPOINTS
   bool getObserverSavepointLine(uint8_t index, char* dest, size_t dest_size) const;
 #else

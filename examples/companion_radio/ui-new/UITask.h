@@ -32,6 +32,8 @@ class UITask : public AbstractUITask {
   GenericVibration vibration;
 #endif
   unsigned long _next_refresh, _auto_off;
+  uint16_t _track_req_seen = 0;
+  uint16_t _track_resp_seen = 0;
   NodePrefs* _node_prefs;
   char _alert[80];
   unsigned long _alert_expiry;

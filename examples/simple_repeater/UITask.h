@@ -45,6 +45,7 @@ class UITask {
   bool _heat_valid;
   uint8_t _screen;
   bool _dump_mode;
+  bool _remote_mode;
 
   void renderCurrScreen();
   void renderTopStats(int y = 0);
@@ -70,19 +71,29 @@ public:
     _heat_valid = false;
     _screen = 0;
     _dump_mode = false;
+    _remote_mode = false;
   }
   void begin(NodePrefs* node_prefs, const char* build_date, const char* firmware_version, MyMesh* mesh = nullptr);
   static uint8_t screenCount() {
 #ifdef FIELD_MONITOR_LITE
     return 5;
 #else
-    return 7;
+    return 8;
 #endif
   }
-#ifdef ENABLE_DISPLAY_DUMP
   static const char* screenName(uint8_t screen);
+#ifdef ENABLE_DISPLAY_DUMP
   bool renderScreenForDump(uint8_t screen);
 #endif
+
+  void setRemoteMode(bool enabled);
+  bool isRemoteMode() const { return _remote_mode; }
+  uint8_t currentScreen() const { return _screen; }
+  bool showScreen(uint8_t screen, const char* status = nullptr);
+  bool showScreenByName(const char* name, const char* status = nullptr);
+  void showNext();
+  void showPrevious();
+  void refreshNow(const char* status = nullptr);
 
   void loop();
 };

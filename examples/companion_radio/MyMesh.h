@@ -108,6 +108,54 @@ struct QuickSendTarget {
   char name[32];
 };
 
+struct FavouriteChatContact {
+  uint8_t pubkey_prefix[7];
+  char name[32];
+};
+
+struct PositionTrackInfo {
+  bool active;
+  bool waiting;
+  bool has_position;
+  bool has_error;
+  bool ref_is_live_gps;
+  bool last_sent_flood;
+  bool twice_mode;
+  char target_name[32];
+  uint16_t duration_min;
+  uint16_t remaining_min;
+  uint16_t age_secs;
+  uint16_t req_count;
+  uint16_t resp_count;
+  uint16_t no_gps_count;
+  uint8_t last_resp_len;
+  uint8_t hop_count;
+  uint32_t last_resp_utc;
+  float distance_m;
+  uint16_t bearing_deg;
+  double lat;
+  double lon;
+  double ref_lat;
+  double ref_lon;
+};
+
+#define FAV_POSITION_SOURCE_TRACK   1
+#define FAV_POSITION_SOURCE_ADVERT  2
+
+struct FavouritePositionInfo {
+  uint8_t pubkey_prefix[7];
+  char name[32];
+  uint8_t source;
+  bool ref_is_live_gps;
+  uint8_t hop_count;
+  uint16_t age_secs;
+  uint32_t seen_utc;
+  float distance_m;
+  uint16_t bearing_deg;
+  double lat;
+  double lon;
+};
+
 #define MONITOR_PATH_HISTORY_SIZE       24
 #define MONITOR_PATH_TEXT_SIZE          36
 #define MONITOR_PATH_KEY_SIZE           (MAX_PATH_SIZE * 2 + 4)
@@ -136,12 +184,14 @@ struct MonitorLastHopInfo {
 #define SCOPE_NAME_SIZE                 31
 #define SCOPE_SOURCE_SIZE               24
 #define SCOPE_TARGET_SIZE               8
+#define SCOPE_FLAG_DISCOVERED          0x01
 
 struct ScopeInfo {
   char name[SCOPE_NAME_SIZE];
   char source[SCOPE_SOURCE_SIZE];
   uint32_t seen_timestamp;
   uint32_t rx_count;
+  uint8_t flags;
 };
 
 struct ScopeTarget {
@@ -173,8 +223,16 @@ public:
   uint8_t getQuickMessageCount() const;
   const char* getQuickMessage(uint8_t index) const;
   bool sendQuickText(const QuickSendTarget& target, const char* text, bool* sent_flood = NULL);
+  bool setQuickSendScope(const char* name);
+  void clearQuickSendScope();
   bool sendQuickReply(const uint8_t* pubkey_prefix, uint8_t prefix_len, const char* text, bool* sent_flood = NULL);
   bool sendQuickChannelReply(uint8_t channel_idx, const char* mention, const char* text);
+  uint8_t getFavouriteChatContacts(FavouriteChatContact dest[], uint8_t max_count);
+  bool startPositionTrack(const uint8_t* pubkey_prefix, uint8_t prefix_len, uint16_t duration_min);
+  void stopPositionTrack();
+  void clearPositionTrackResult();
+  bool getPositionTrackInfo(PositionTrackInfo& info) const;
+  uint8_t getFavouritePositions(FavouritePositionInfo dest[], uint8_t max_count);
   uint32_t getMonitorRxPackets() const { return monitor_rx_packets; }
   int getMonitorNoiseFloor() const { return _radio->getNoiseFloor(); }
   float getMonitorLastSnr() const { return monitor_last_snr_x4 / 4.0f; }
@@ -184,6 +242,7 @@ public:
   bool getMonitorLastHopLine(uint8_t index, char* dest, size_t dest_size) const;
   uint8_t getMonitorActivity(uint16_t* dest, uint8_t max_count);
   uint8_t getMonitorAirtime(uint16_t* dest, uint8_t max_count);
+  void resetMonitorLiveStats();
   uint8_t queryNearbyScopes();
   uint8_t getScopeInfo(ScopeInfo dest[], uint8_t max_count) const;
   void formatPacketScope(const mesh::Packet* packet, char* dest, size_t dest_size) const;
@@ -191,6 +250,8 @@ public:
   uint8_t getScopeResponseCount() const { return scope_response_count; }
   uint8_t getScopeDiscoverResponseCount() const { return scope_discover_response_count; }
   uint8_t getScopeEmptyResponseCount() const { return scope_empty_response_count; }
+  bool isPacketForwardEnabled() const { return _prefs.client_repeat != 0; }
+  bool setPacketForwardEnabled(bool enabled);
 
 protected:
   float getAirtimeBudgetFactor() const override;
@@ -290,11 +351,15 @@ private:
   void loadQuickMessages();
   bool saveQuickMessages();
   void printQuickMessages();
+  void printFavouriteChatContacts();
+  void printNodePosition();
+  void loadScopeCache();
+  bool saveScopeCache();
   bool isMonitorHeatstripRequest(const char* text) const;
   bool isDisplayableText(const char* text) const;
   void formatMonitorHeatstripReply(char* dest, size_t dest_size) const;
   bool sendMonitorHeatstripReply(const ContactInfo& recipient);
-  void rememberScopeName(const char* name, const char* source);
+  bool rememberScopeName(const char* name, const char* source, bool discovered = true);
   void ingestScopeNames(const ContactInfo& contact, const char* names);
   bool isPendingScopeTag(uint32_t tag);
   void noteScopeRx(const char* name, const char* source);
@@ -303,6 +368,9 @@ private:
   bool sendScopeRequest(ContactInfo& recipient, const uint8_t* request, size_t request_len, uint8_t& sent);
   ContactInfo* ensureScopeContact(const ContactInfo& candidate);
   void sendScopeDiscoverReq();
+  void pollPositionTrack();
+  bool sendPositionTrackReq();
+  bool ingestPositionTrackResponse(const ContactInfo& contact, const uint8_t* data, uint8_t len);
   void monitorRollActivity();
   void rememberMonitorPath(const mesh::Packet* packet);
   void rememberMonitorLastHop(const mesh::Packet* packet, int8_t snr_x4);
@@ -378,6 +446,33 @@ private:
   uint8_t scope_response_count;
   uint8_t scope_discover_response_count;
   uint8_t scope_empty_response_count;
+  uint32_t pending_position_track;
+  uint8_t position_track_pubkey[7];
+  char position_track_name[32];
+  unsigned long position_track_started_at;
+  unsigned long position_track_until;
+  unsigned long position_track_next_req;
+  unsigned long position_track_last_fix_at;
+  uint32_t position_track_last_resp_utc;
+  uint16_t position_track_duration_min;
+  bool position_track_active;
+  bool position_track_waiting;
+  bool position_track_has_position;
+  bool position_track_has_error;
+  bool position_track_ref_is_live_gps;
+  bool position_track_last_sent_flood;
+  bool position_track_twice_mode;
+  uint16_t position_track_req_count;
+  uint16_t position_track_resp_count;
+  uint16_t position_track_no_gps_count;
+  uint8_t position_track_last_resp_len;
+  uint8_t position_track_hop_count;
+  float position_track_distance_m;
+  uint16_t position_track_bearing_deg;
+  double position_track_lat;
+  double position_track_lon;
+  double position_track_ref_lat;
+  double position_track_ref_lon;
 };
 
 extern MyMesh the_mesh;
