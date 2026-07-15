@@ -841,7 +841,8 @@ void MyMesh::logRx(mesh::Packet *pkt, int len, float score) {
 #endif
   setObserverHealthPhase(11);
 #ifdef WITH_MQTT_OBSERVER
-  if (mqtt_observer.sendPacket(pkt, true, (int)_radio->getLastRSSI(), snr_x4)) {
+  if (mqtt_observer.sendPacket(pkt, true, (int)_radio->getLastRSSI(), snr_x4, getRTCClock()->getCurrentTime(),
+                               (int)(score * 1000))) {
     OBSERVER_LOCK();
     observer_mqtt_published++;
     OBSERVER_UNLOCK();
@@ -926,7 +927,7 @@ void MyMesh::logTx(mesh::Packet *pkt, int len) {
   }
 #endif
 #ifdef WITH_MQTT_OBSERVER
-  mqtt_observer.sendPacket(pkt, false, 0, (int)(pkt->getSNR() * 4));
+  mqtt_observer.sendPacket(pkt, false, 0, (int)(pkt->getSNR() * 4), getRTCClock()->getCurrentTime(), 0);
 #endif
 
   if (_logging) {
@@ -3812,7 +3813,7 @@ void MyMesh::loop() {
 #endif
 #ifdef WITH_MQTT_OBSERVER
   setObserverHealthPhase(50);
-  mqtt_observer.loop();
+  mqtt_observer.loop(getRTCClock()->getCurrentTime());
 #endif
 
   setObserverHealthPhase(51);

@@ -70,8 +70,9 @@ public:
     display.setTextSize(1);
     display.drawTextCentered(display.width()/2, 35, _version_info);
 
-    display.drawTextCentered(display.width()/2, 44, "Fieldtest by");
-    display.drawTextCentered(display.width()/2, 66, "Moorbock");
+    display.drawTextCentered(display.width()/2, 44, "Fieldtest fuer");
+    display.drawTextCentered(display.width()/2, 57, "peter.kernspecht@web.de");
+    display.drawTextCentered(display.width()/2, 70, "by Moorbock");
 
     display.setTextSize(1);
     display.drawTextCentered(display.width()/2, 94, FIRMWARE_BUILD_DATE);
