@@ -202,6 +202,18 @@ struct ScopeTarget {
   uint32_t seen_timestamp;
 };
 
+struct KeepaliveInfo {
+  bool enabled;
+  uint32_t received_count;
+  uint32_t last_timestamp;
+  uint8_t ack_state;
+  uint32_t ack_trip_millis;
+  uint32_t ack_ok_count;
+  uint32_t ack_timeout_count;
+  char scope[SCOPE_NAME_SIZE];
+  char repeater[MONITOR_LAST_HOP_TEXT_SIZE];
+};
+
 class MyMesh : public BaseChatMesh, public DataStoreHost {
 public:
   MyMesh(mesh::Radio &radio, mesh::RNG &rng, mesh::RTCClock &rtc, SimpleMeshTables &tables, DataStore& store, AbstractUITask* ui=NULL);
@@ -252,6 +264,8 @@ public:
   uint8_t getScopeEmptyResponseCount() const { return scope_empty_response_count; }
   bool isPacketForwardEnabled() const { return _prefs.isRepeatEn(); }
   bool setPacketForwardEnabled(bool enabled);
+  void getKeepaliveInfo(KeepaliveInfo& info) const;
+  bool setKeepaliveEnabled(bool enabled);
 
 protected:
   float getAirtimeBudgetFactor() const override;
@@ -282,6 +296,11 @@ protected:
   ContactInfo* processAck(const uint8_t *data) override;
   void queueMessage(const ContactInfo &from, uint8_t txt_type, mesh::Packet *pkt, uint32_t sender_timestamp,
                     const uint8_t *extra, int extra_len, const char *text);
+  void formatKeepaliveReply(const char *label, char *dest, size_t dest_size) const;
+  bool resolvePacketScopeKey(const mesh::Packet *packet, TransportKey& key) const;
+  bool sendKeepaliveReply(const ContactInfo &recipient, const mesh::Packet *request, const char *label);
+  bool sendKeepaliveChannel(const char *channel_name, const mesh::Packet *request,
+                            const char *label);
 
   void onMessageRecv(const ContactInfo &from, mesh::Packet *pkt, uint32_t sender_timestamp,
                      const char *text) override;
@@ -363,6 +382,8 @@ private:
   void printNodePosition();
   void loadScopeCache();
   bool saveScopeCache();
+  void loadKeepalivePrefs();
+  bool saveKeepalivePrefs();
   bool isMonitorHeatstripRequest(const char* text) const;
   bool isDisplayableText(const char* text) const;
   void formatMonitorHeatstripReply(char* dest, size_t dest_size) const;
@@ -409,6 +430,18 @@ private:
   static const uint8_t QUICK_MESSAGE_SLOTS = 9;
   static const uint8_t QUICK_MESSAGE_SIZE = 80;
   char quick_messages[QUICK_MESSAGE_SLOTS][QUICK_MESSAGE_SIZE];
+  bool keepalive_enabled;
+  uint32_t keepalive_received_count;
+  uint32_t keepalive_last_timestamp;
+  uint32_t keepalive_expected_ack;
+  unsigned long keepalive_sent_millis;
+  unsigned long keepalive_ack_deadline;
+  uint32_t keepalive_ack_trip_millis;
+  uint32_t keepalive_ack_ok_count;
+  uint32_t keepalive_ack_timeout_count;
+  uint8_t keepalive_ack_state;
+  char keepalive_last_scope[SCOPE_NAME_SIZE];
+  char keepalive_last_repeater[MONITOR_LAST_HOP_TEXT_SIZE];
   uint8_t app_target_ver;
   uint8_t *sign_data;
   uint32_t sign_data_len;
@@ -445,6 +478,9 @@ private:
   int8_t monitor_last_snr_x4;
   MonitorPathInfo monitor_paths[MONITOR_PATH_HISTORY_SIZE];
   MonitorLastHopInfo monitor_last_hops[MONITOR_LAST_HOP_HISTORY_SIZE];
+  uint8_t monitor_latest_hops;
+  char monitor_latest_scope[SCOPE_NAME_SIZE + 1];
+  char monitor_latest_repeater[MONITOR_LAST_HOP_TEXT_SIZE];
   uint16_t monitor_activity_bins[MONITOR_ACTIVITY_BINS];
   uint16_t monitor_airtime_bins[MONITOR_ACTIVITY_BINS];
   uint8_t monitor_activity_index;

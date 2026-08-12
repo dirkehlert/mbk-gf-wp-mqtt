@@ -110,6 +110,7 @@
 #define PUBLIC_GROUP_PSK                "izOH6cXN6mrJ5e26oRXNcg=="
 #define QUICK_MESSAGES_FILE             "/quickmsg"
 #define SCOPE_CACHE_FILE                "/scopecache"
+#define KEEPALIVE_PREFS_FILE             "/keepalive"
 #define ANON_REQ_TYPE_REGIONS           0x01
 #define CTL_TYPE_NODE_DISCOVER_REQ      0x80
 #define CTL_TYPE_NODE_DISCOVER_RESP     0x90
@@ -502,6 +503,21 @@ void MyMesh::logRx(mesh::Packet* packet, int len, float score) {
   uint32_t airtime_bin = (uint32_t)monitor_airtime_bins[monitor_activity_index] + airtime_ms;
   monitor_airtime_bins[monitor_activity_index] = airtime_bin > UINT16_MAX ? UINT16_MAX : (uint16_t)airtime_bin;
   monitor_last_snr_x4 = (int8_t)(packet->getSNR() * 4);
+  monitor_latest_hops = packet->getPathHashCount();
+  formatPacketScope(packet, monitor_latest_scope, sizeof(monitor_latest_scope));
+  if (monitor_latest_hops == 0) {
+    StrHelper::strncpy(monitor_latest_repeater, "-", sizeof(monitor_latest_repeater));
+  } else {
+    const char* hex = "0123456789ABCDEF";
+    uint8_t hash_size = packet->getPathHashSize();
+    const uint8_t* hash = &packet->path[(monitor_latest_hops - 1) * hash_size];
+    size_t pos = 0;
+    for (uint8_t i = 0; i < hash_size && pos + 2 < sizeof(monitor_latest_repeater); i++) {
+      monitor_latest_repeater[pos++] = hex[hash[i] >> 4];
+      monitor_latest_repeater[pos++] = hex[hash[i] & 0x0F];
+    }
+    monitor_latest_repeater[pos] = 0;
+  }
   notePacketScope(packet);
   rememberMonitorPath(packet);
   rememberMonitorLastHop(packet, monitor_last_snr_x4);
@@ -514,6 +530,9 @@ void MyMesh::resetMonitorLiveStats() {
   monitor_next_activity_rollover = 0;
   memset(monitor_paths, 0, sizeof(monitor_paths));
   memset(monitor_last_hops, 0, sizeof(monitor_last_hops));
+  monitor_latest_hops = 0;
+  StrHelper::strncpy(monitor_latest_scope, "none", sizeof(monitor_latest_scope));
+  StrHelper::strncpy(monitor_latest_repeater, "-", sizeof(monitor_latest_repeater));
   memset(monitor_activity_bins, 0, sizeof(monitor_activity_bins));
   memset(monitor_airtime_bins, 0, sizeof(monitor_airtime_bins));
   for (uint8_t i = 0; i < SCOPE_CACHE_SIZE; i++) {
@@ -1709,6 +1728,43 @@ bool MyMesh::saveQuickMessages() {
   return true;
 }
 
+void MyMesh::loadKeepalivePrefs() {
+  keepalive_enabled = true;
+  if (!_store) return;
+  File file = _store->openRead(KEEPALIVE_PREFS_FILE);
+  if (!file) return;
+  int value = file.read();
+  file.close();
+  if (value == '0') keepalive_enabled = false;
+}
+
+bool MyMesh::saveKeepalivePrefs() {
+  if (!_store) return false;
+  File file = _store->openWriteFile(KEEPALIVE_PREFS_FILE);
+  if (!file) return false;
+  file.print(keepalive_enabled ? '1' : '0');
+  file.print('\n');
+  file.close();
+  return true;
+}
+
+void MyMesh::getKeepaliveInfo(KeepaliveInfo& info) const {
+  info.enabled = keepalive_enabled;
+  info.received_count = keepalive_received_count;
+  info.last_timestamp = keepalive_last_timestamp;
+  info.ack_state = keepalive_ack_state;
+  info.ack_trip_millis = keepalive_ack_trip_millis;
+  info.ack_ok_count = keepalive_ack_ok_count;
+  info.ack_timeout_count = keepalive_ack_timeout_count;
+  StrHelper::strncpy(info.scope, keepalive_last_scope, sizeof(info.scope));
+  StrHelper::strncpy(info.repeater, keepalive_last_repeater, sizeof(info.repeater));
+}
+
+bool MyMesh::setKeepaliveEnabled(bool enabled) {
+  keepalive_enabled = enabled;
+  return saveKeepalivePrefs();
+}
+
 uint8_t MyMesh::getQuickMessageCount() const {
   return QUICK_MESSAGE_SLOTS;
 }
@@ -1792,6 +1848,14 @@ void MyMesh::onContactPathUpdated(const ContactInfo &contact) {
 }
 
 ContactInfo*  MyMesh::processAck(const uint8_t *data) {
+  if (keepalive_expected_ack != 0 &&
+      memcmp(data, &keepalive_expected_ack, sizeof(keepalive_expected_ack)) == 0) {
+    keepalive_ack_state = 2;
+    keepalive_ack_ok_count++;
+    keepalive_ack_trip_millis = _ms->getMillis() - keepalive_sent_millis;
+    keepalive_expected_ack = 0;
+    keepalive_ack_deadline = 0;
+  }
   // see if matches any in a table
   for (int i = 0; i < EXPECTED_ACK_TABLE_SIZE; i++) {
     if (memcmp(data, &expected_ack_table[i].ack, 4) == 0) { // got an ACK from recipient
@@ -1916,9 +1980,165 @@ void MyMesh::sendFloodScoped(const mesh::GroupChannel& channel, mesh::Packet* pk
   }
 }
 
+static bool isExactTextCommand(const char *text, const char *command) {
+  if (!text || !command) return false;
+  while (*text == ' ' || *text == '\t' || *text == '\r' || *text == '\n') text++;
+  size_t len = strlen(text);
+  while (len > 0 && (text[len - 1] == ' ' || text[len - 1] == '\t' ||
+                     text[len - 1] == '\r' || text[len - 1] == '\n')) len--;
+  return strlen(command) == len && memcmp(text, command, len) == 0;
+}
+
+void MyMesh::formatKeepaliveReply(const char *label, char *dest, size_t dest_size) const {
+  if (!dest || dest_size == 0) return;
+  uint16_t batt_mv = board.getBattMilliVolts();
+  int nf = _radio->getNoiseFloor();
+  double lat = sensors.node_lat;
+  double lon = sensors.node_lon;
+  bool has_position = !(lat == 0.0 && lon == 0.0) &&
+                      lat >= -90.0 && lat <= 90.0 && lon >= -180.0 && lon <= 180.0;
+
+  if (has_position) {
+    snprintf(dest, dest_size, "%s %s V:%u.%02u NF:%d H:%u S:%s R:%s POS:%.6f,%.6f",
+             label, _prefs.node_name, batt_mv / 1000, (batt_mv % 1000) / 10,
+             nf, (unsigned int)monitor_latest_hops,
+             monitor_latest_scope[0] ? monitor_latest_scope : "none",
+             monitor_latest_repeater[0] ? monitor_latest_repeater : "-", lat, lon);
+  } else {
+    snprintf(dest, dest_size, "%s %s V:%u.%02u NF:%d H:%u S:%s R:%s",
+             label, _prefs.node_name, batt_mv / 1000, (batt_mv % 1000) / 10, nf,
+             (unsigned int)monitor_latest_hops,
+             monitor_latest_scope[0] ? monitor_latest_scope : "none",
+             monitor_latest_repeater[0] ? monitor_latest_repeater : "-");
+  }
+}
+
+bool MyMesh::resolvePacketScopeKey(const mesh::Packet *packet, TransportKey& key) const {
+  if (!packet || !packet->hasTransportCodes()) return false;
+
+  memcpy(key.key, _prefs.default_scope_key, sizeof(key.key));
+  if (!key.isNull() && packet->transport_codes[0] == key.calcTransportCode(packet)) {
+    return true;
+  }
+
+  TransportKeyStore temp;
+  for (uint8_t i = 0; i < SCOPE_CACHE_SIZE; i++) {
+    if (scope_cache[i].name[0] == 0) continue;
+    char auto_name[SCOPE_NAME_SIZE + 1];
+    snprintf(auto_name, sizeof(auto_name), "#%s", scope_cache[i].name);
+    temp.getAutoKeyFor(i + 1, auto_name, key);
+    if (packet->transport_codes[0] == key.calcTransportCode(packet)) return true;
+  }
+  memset(key.key, 0, sizeof(key.key));
+  return false;
+}
+
+bool MyMesh::sendKeepaliveReply(const ContactInfo &recipient, const mesh::Packet *request,
+                                const char *label) {
+  char reply[MAX_TEXT_LEN + 1];
+  formatKeepaliveReply(label, reply, sizeof(reply));
+  ContactInfo reply_to = recipient;
+  bool flood_reply = request && request->isRouteFlood();
+  if (flood_reply) reply_to.out_path_len = OUT_PATH_UNKNOWN;
+
+  TransportKey previous_scope = send_scope;
+  bool previous_unscoped = send_unscoped;
+  if (flood_reply) {
+    TransportKey incoming_scope;
+    if (resolvePacketScopeKey(request, incoming_scope)) {
+      send_scope = incoming_scope;
+      send_unscoped = false;
+    } else {
+      memset(send_scope.key, 0, sizeof(send_scope.key));
+      send_unscoped = true;
+    }
+  }
+
+  uint32_t expected_ack = 0;
+  uint32_t est_timeout = 0;
+  bool sent = sendMessage(reply_to, getRTCClock()->getCurrentTimeUnique(), 0, reply,
+                          expected_ack, est_timeout) != MSG_SEND_FAILED;
+  send_scope = previous_scope;
+  send_unscoped = previous_unscoped;
+  if (sent && expected_ack) {
+    keepalive_sent_millis = _ms->getMillis();
+    expected_ack_table[next_ack_idx].msg_sent = keepalive_sent_millis;
+    expected_ack_table[next_ack_idx].ack = expected_ack;
+    expected_ack_table[next_ack_idx].contact =
+        lookupContactByPubKey(recipient.id.pub_key, PUB_KEY_SIZE);
+    next_ack_idx = (next_ack_idx + 1) % EXPECTED_ACK_TABLE_SIZE;
+    keepalive_expected_ack = expected_ack;
+    keepalive_ack_deadline = futureMillis(est_timeout);
+    keepalive_ack_trip_millis = 0;
+    keepalive_ack_state = 1;
+  } else {
+    keepalive_expected_ack = 0;
+    keepalive_ack_deadline = 0;
+    keepalive_ack_trip_millis = 0;
+    keepalive_ack_state = 4;
+  }
+  return sent;
+}
+
+bool MyMesh::sendKeepaliveChannel(const char *channel_name, const mesh::Packet *request,
+                                  const char *label) {
+#ifdef MAX_GROUP_CHANNELS
+  if (!channel_name || !channel_name[0]) return false;
+  for (uint8_t i = 0; i < MAX_GROUP_CHANNELS; i++) {
+    ChannelDetails channel;
+    if (!getChannel(i, channel) || strcmp(channel.name, channel_name) != 0) continue;
+    char reply[MAX_TEXT_LEN + 1];
+    formatKeepaliveReply(label, reply, sizeof(reply));
+    TransportKey previous_scope = send_scope;
+    bool previous_unscoped = send_unscoped;
+    TransportKey incoming_scope;
+    if (resolvePacketScopeKey(request, incoming_scope)) {
+      send_scope = incoming_scope;
+      send_unscoped = false;
+    } else {
+      memset(send_scope.key, 0, sizeof(send_scope.key));
+      send_unscoped = true;
+    }
+    bool sent = sendGroupMessage(getRTCClock()->getCurrentTimeUnique(), channel.channel,
+                                 _prefs.node_name, reply, strlen(reply));
+    send_scope = previous_scope;
+    send_unscoped = previous_unscoped;
+    return sent;
+  }
+#else
+  (void)channel_name;
+  (void)label;
+#endif
+  return false;
+}
+
 void MyMesh::onMessageRecv(const ContactInfo &from, mesh::Packet *pkt, uint32_t sender_timestamp,
                            const char *text) {
   markConnectionActive(from); // in case this is from a server, and we have a connection
+  if (isExactTextCommand(text, "KEEPALIVE")) {
+    keepalive_received_count++;
+    keepalive_last_timestamp = getRTCClock()->getCurrentTime();
+    StrHelper::strncpy(keepalive_last_scope, monitor_latest_scope, sizeof(keepalive_last_scope));
+    StrHelper::strncpy(keepalive_last_repeater, monitor_latest_repeater, sizeof(keepalive_last_repeater));
+    if (!keepalive_enabled) return;
+    sendKeepaliveReply(from, pkt, "KEEPALIVE");
+    return;
+  }
+  if (isExactTextCommand(text, "KEEPALIVEC")) {
+    keepalive_received_count++;
+    keepalive_last_timestamp = getRTCClock()->getCurrentTime();
+    StrHelper::strncpy(keepalive_last_scope, monitor_latest_scope, sizeof(keepalive_last_scope));
+    StrHelper::strncpy(keepalive_last_repeater, monitor_latest_repeater, sizeof(keepalive_last_repeater));
+    if (!keepalive_enabled) return;
+    if (!sendKeepaliveChannel("MBKCHN1", pkt, "KEEPALIVEC")) {
+      uint32_t expected_ack = 0;
+      uint32_t est_timeout = 0;
+      sendMessage(from, getRTCClock()->getCurrentTimeUnique(), 0,
+                  "KEEPALIVEC ERROR: Channel MBKCHN1 fehlt",
+                  expected_ack, est_timeout);
+    }
+    return;
+  }
   if (isMonitorHeatstripRequest(text)) {
     sendMonitorHeatstripReply(from);
     return;
@@ -2332,12 +2552,27 @@ MyMesh::MyMesh(mesh::Radio &radio, mesh::RNG &rng, mesh::RTCClock &rtc, SimpleMe
   memset(advert_paths, 0, sizeof(advert_paths));
   memset(send_scope.key, 0, sizeof(send_scope.key));
   send_unscoped = false;
+  keepalive_enabled = true;
+  keepalive_received_count = 0;
+  keepalive_last_timestamp = 0;
+  keepalive_expected_ack = 0;
+  keepalive_sent_millis = 0;
+  keepalive_ack_deadline = 0;
+  keepalive_ack_trip_millis = 0;
+  keepalive_ack_ok_count = 0;
+  keepalive_ack_timeout_count = 0;
+  keepalive_ack_state = 0;
+  StrHelper::strncpy(keepalive_last_scope, "none", sizeof(keepalive_last_scope));
+  StrHelper::strncpy(keepalive_last_repeater, "-", sizeof(keepalive_last_repeater));
   monitor_rx_packets = 0;
   monitor_last_snr_x4 = 0;
   monitor_activity_index = 0;
   monitor_next_activity_rollover = 0;
   memset(monitor_paths, 0, sizeof(monitor_paths));
   memset(monitor_last_hops, 0, sizeof(monitor_last_hops));
+  monitor_latest_hops = 0;
+  StrHelper::strncpy(monitor_latest_scope, "none", sizeof(monitor_latest_scope));
+  StrHelper::strncpy(monitor_latest_repeater, "-", sizeof(monitor_latest_repeater));
   memset(monitor_activity_bins, 0, sizeof(monitor_activity_bins));
   memset(monitor_airtime_bins, 0, sizeof(monitor_airtime_bins));
   memset(scope_cache, 0, sizeof(scope_cache));
@@ -2472,6 +2707,7 @@ void MyMesh::begin(bool has_display) {
   _store->loadChannels(this);
   loadQuickMessages();
   loadScopeCache();
+  loadKeepalivePrefs();
 
   radio_driver.setParams(_prefs.freq, _prefs.bw, _prefs.sf, _prefs.cr);
   radio_driver.setTxPower(_prefs.tx_power_dbm);
@@ -3782,6 +4018,14 @@ void MyMesh::checkSerialInterface() {
 
 void MyMesh::loop() {
   BaseChatMesh::loop();
+
+  if (keepalive_ack_state == 1 && keepalive_ack_deadline &&
+      millisHasNowPassed(keepalive_ack_deadline)) {
+    keepalive_ack_state = 3;
+    keepalive_ack_timeout_count++;
+    keepalive_expected_ack = 0;
+    keepalive_ack_deadline = 0;
+  }
 
   checkCLIRescueCmd();
   if (!_cli_rescue) checkSerialInterface();

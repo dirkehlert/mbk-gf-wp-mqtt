@@ -70,9 +70,8 @@ public:
     display.setTextSize(1);
     display.drawTextCentered(display.width()/2, 35, _version_info);
 
-    display.drawTextCentered(display.width()/2, 44, "Fieldtest fuer");
-    display.drawTextCentered(display.width()/2, 57, "peter.kernspecht@web.de");
-    display.drawTextCentered(display.width()/2, 70, "by Moorbock");
+    display.drawTextCentered(display.width()/2, 48, "Fieldtest by");
+    display.drawTextCentered(display.width()/2, 66, "Moorbock");
 
     display.setTextSize(1);
     display.drawTextCentered(display.width()/2, 94, FIRMWARE_BUILD_DATE);
@@ -137,6 +136,7 @@ class HomeScreen : public UIScreen {
     HEATSTRIP,
     POSITIONS,
     LOAD,
+    KEEPALIVE,
 #if ENV_INCLUDE_GPS == 1
     GPS,
 #endif
@@ -1068,6 +1068,37 @@ public:
       } else {
         renderScopes(display);
       }
+    } else if (_page == HomePage::KEEPALIVE) {
+      KeepaliveInfo info;
+      the_mesh.getKeepaliveInfo(info);
+      display.setTextSize(1);
+      display.setColor(UIColor::title_txt);
+      display.drawTextEllipsized(0, compact ? 16 : 22, display.width(), "KEEPALIVE");
+      display.setColor(UIColor::primary_txt);
+      snprintf(tmp, sizeof(tmp), "%s RX:%lu", info.enabled ? "EIN" : "AUS",
+               (unsigned long)info.received_count);
+      display.drawTextEllipsized(0, compact ? 26 : 38, display.width(), tmp);
+      const char* ack = "-";
+      if (info.ack_state == 1) ack = "WAIT";
+      else if (info.ack_state == 2) ack = "OK";
+      else if (info.ack_state == 3) ack = "TIMEOUT";
+      else if (info.ack_state == 4) ack = "FAIL";
+      snprintf(tmp, sizeof(tmp), "ACK:%s O:%lu T:%lu", ack,
+               (unsigned long)info.ack_ok_count,
+               (unsigned long)info.ack_timeout_count);
+      display.drawTextEllipsized(0, compact ? 36 : 54, display.width(), tmp);
+      if (info.last_timestamp == 0) {
+        strcpy(tmp, "Letzter: -");
+      } else {
+        uint32_t now = _rtc->getCurrentTime();
+        uint32_t age = now >= info.last_timestamp ? now - info.last_timestamp : 0;
+        if (age < 60) snprintf(tmp, sizeof(tmp), "Letzter: %lus", (unsigned long)age);
+        else if (age < 3600) snprintf(tmp, sizeof(tmp), "Letzter: %lum", (unsigned long)(age / 60));
+        else snprintf(tmp, sizeof(tmp), "Letzter: %luh", (unsigned long)(age / 3600));
+      }
+      display.drawTextEllipsized(0, compact ? 46 : 70, display.width(), tmp);
+      snprintf(tmp, sizeof(tmp), "S:%s R:%s", info.scope, info.repeater);
+      display.drawTextEllipsized(0, compact ? 56 : 86, display.width(), tmp);
 #if ENV_INCLUDE_GPS == 1
     } else if (_page == HomePage::GPS) {
       LocationProvider* nmea = sensors.getLocationProvider();
@@ -1457,6 +1488,14 @@ public:
           _task->showAlert("Stats reset", 1000);
         }
       }
+      return true;
+    }
+    if (c == KEY_ENTER && _page == HomePage::KEEPALIVE) {
+      KeepaliveInfo info;
+      the_mesh.getKeepaliveInfo(info);
+      bool saved = the_mesh.setKeepaliveEnabled(!info.enabled);
+      _task->showAlert(saved ? (!info.enabled ? "Keepalive EIN" : "Keepalive AUS")
+                             : "Speichern fehlgeschlagen", 1200);
       return true;
     }
     if (c == KEY_CONTEXT_MENU && _page == HomePage::LOAD) {
