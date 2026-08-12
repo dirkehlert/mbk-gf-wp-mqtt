@@ -5,7 +5,12 @@
 
 #ifdef DISPLAY_CLASS
   #include "UITask.h"
-  static UITask ui_task(display);
+  static UITask ui_task(board, display);
+#endif
+
+#ifdef ETHERNET_ENABLED
+  #define ETHERNET_CLI_BANNER "MeshCore Repeater CLI"
+  #include <helpers/nrf52/EthernetCLI.h>
 #endif
 
 StdRNG fast_rng;
@@ -18,17 +23,8 @@ void halt() {
 }
 
 static char command[160];
-
-#if defined(WIRELESS_PAPER)
-static const unsigned long SERIAL_CONSOLE_BOOT_WINDOW_MS = 120000;
-
-static bool shouldPollSerialConsole() {
-  return command[0] || millis() < SERIAL_CONSOLE_BOOT_WINDOW_MS;
-}
-#else
-static bool shouldPollSerialConsole() {
-  return true;
-}
+#ifdef ETHERNET_ENABLED
+static char ethernet_command[160];
 #endif
 
 // For power saving
@@ -43,10 +39,11 @@ void setup() {
   Serial.begin(115200);
   delay(1000);
 
-  the_mesh.beginObserverHealthBoot();
-  the_mesh.setObserverHealthPhase(64);
   board.begin();
-  the_mesh.setObserverHealthPhase(65);
+
+#ifdef HAS_EXTERNAL_WATCHDOG
+  external_watchdog.begin();
+#endif
 
 #if defined(MESH_DEBUG) && defined(NRF52_PLATFORM)
   // give some extra time for serial to settle so
@@ -55,25 +52,20 @@ void setup() {
 #endif
 
 #ifdef DISPLAY_CLASS
-  the_mesh.setObserverHealthPhase(66);
   if (display.begin()) {
     display.startFrame();
     display.setCursor(0, 0);
     display.print("Please wait...");
     display.endFrame();
   }
-  the_mesh.setObserverHealthPhase(67);
 #endif
 
-  the_mesh.setObserverHealthPhase(68);
   if (!radio_init()) {
     MESH_DEBUG_PRINTLN("Radio init failed!");
     halt();
   }
-  the_mesh.setObserverHealthPhase(69);
 
   fast_rng.begin(radio_driver.getRngSeed());
-  the_mesh.setObserverHealthPhase(70);
 
   FILESYSTEM* fs;
 #if defined(NRF52_PLATFORM) || defined(STM32_PLATFORM)
@@ -92,7 +84,6 @@ void setup() {
 #else
   #error "need to define filesystem"
 #endif
-  the_mesh.setObserverHealthPhase(71);
   if (!store.load("_main", the_mesh.self_id)) {
     MESH_DEBUG_PRINTLN("Generating new keypair");
     the_mesh.self_id = radio_new_identity();   // create new random identity
@@ -102,50 +93,46 @@ void setup() {
     }
     store.save("_main", the_mesh.self_id);
   }
-  the_mesh.setObserverHealthPhase(72);
 
-#ifdef ENABLE_BOOT_ID_PRINT
   Serial.print("Repeater ID: ");
   mesh::Utils::printHex(Serial, the_mesh.self_id.pub_key, PUB_KEY_SIZE); Serial.println();
-#endif
 
   command[0] = 0;
+#ifdef ETHERNET_ENABLED
+  ethernet_command[0] = 0;
+#endif
 
-  the_mesh.setObserverHealthPhase(73);
   sensors.begin();
 
-  the_mesh.setObserverHealthPhase(74);
   the_mesh.begin(fs);
-  the_mesh.setObserverHealthPhase(75);
 
 #ifdef DISPLAY_CLASS
-  ui_task.begin(the_mesh.getNodePrefs(), FIRMWARE_BUILD_DATE, FIRMWARE_VERSION, &the_mesh);
-  the_mesh.setUiTask(&ui_task);
+  ui_task.begin(the_mesh.getNodePrefs(), FIRMWARE_BUILD_DATE, FIRMWARE_VERSION);
 #endif
-  the_mesh.setObserverHealthPhase(76);
+
+#ifdef ETHERNET_ENABLED
+  ethernet_start_task();
+#endif
 
   // send out initial zero hop Advertisement to the mesh
 #if ENABLE_ADVERT_ON_BOOT == 1
   the_mesh.sendSelfAdvertisement(16000, false);
 #endif
-  the_mesh.setObserverHealthPhase(0);
 
   board.onBootComplete();
 }
 
 void loop() {
-  the_mesh.setObserverHealthPhase(58);
+  // Handle Serial CLI
   int len = strlen(command);
-  if (shouldPollSerialConsole()) {
-    while (Serial.available() && len < sizeof(command)-1) {
-      char c = Serial.read();
-      if (c != '\n') {
-        command[len++] = c;
-        command[len] = 0;
-        Serial.print(c);
-      }
-      if (c == '\r') break;
+  while (Serial.available() && len < sizeof(command)-1) {
+    char c = Serial.read();
+    if (c != '\n') {
+      command[len++] = c;
+      command[len] = 0;
+      Serial.print(c);
     }
+    if (c == '\r') break;
   }
   if (len == sizeof(command)-1) {  // command buffer full
     command[sizeof(command)-1] = '\r';
@@ -154,39 +141,36 @@ void loop() {
   if (len > 0 && command[len - 1] == '\r') {  // received complete line
     Serial.print('\n');
     command[len - 1] = 0;  // replace newline with C string null terminator
-#if defined(ENABLE_DISPLAY_DUMP) && defined(DISPLAY_CLASS)
-    if (strncmp(command, "screen.dump", 11) == 0 && (command[11] == 0 || command[11] == ' ')) {
-      char* arg = command + 11;
-      while (*arg == ' ') arg++;
-      if (*arg) {
-        int screen = atoi(arg);
-        if (!ui_task.renderScreenForDump((uint8_t)screen)) {
-          Serial.println("ERR bad screen");
-        } else {
-          display.dumpPBM(Serial);
-        }
-      } else {
-        display.dumpPBM(Serial);
-      }
-      command[0] = 0;
-    } else
-#endif
-    {
-    the_mesh.setObserverHealthPhase(59);
-    the_mesh.setObserverHealthMarker(6);
-    unsigned long cli_started = millis();
     char reply[160];
+    reply[0] = 0;
+#ifdef ETHERNET_ENABLED
+    if (!ethernet_handle_command(command, reply)) {
+      the_mesh.handleCommand(0, command, reply);
+    }
+#else
     the_mesh.handleCommand(0, command, reply);  // NOTE: there is no sender_timestamp via serial!
-    the_mesh.noteObserverTiming(6, millis() - cli_started);
+#endif
     if (reply[0]) {
       Serial.print("  -> "); Serial.println(reply);
     }
 
     command[0] = 0;  // reset command buffer
-    }
   }
 
-#if defined(PIN_USER_BTN) && defined(_SEEED_SENSECAP_SOLAR_H_)
+#ifdef ETHERNET_ENABLED
+  ethernet_loop_maintain();
+  if (ethernet_read_line(ethernet_command, sizeof(ethernet_command))) {
+    char reply[160];
+    reply[0] = 0;
+    if (!ethernet_handle_command(ethernet_command, reply)) {
+      the_mesh.handleCommand(0, ethernet_command, reply);
+    }
+    ethernet_send_reply(reply);
+    ethernet_command[0] = 0;
+  }
+#endif
+
+#if defined(PIN_USER_BTN) && defined(_SEEED_SENSECAP_SOLAR_H_) && !defined(DISPLAY_CLASS)
   // Hold the user button to power off the SenseCAP Solar repeater.
   int btnState = digitalRead(PIN_USER_BTN);
   if (btnState == LOW) {
@@ -201,21 +185,16 @@ void loop() {
   }
 #endif
 
-  the_mesh.setObserverHealthPhase(60);
   the_mesh.loop();
-  the_mesh.setObserverHealthPhase(61);
   sensors.loop();
 #ifdef DISPLAY_CLASS
-  the_mesh.setObserverHealthPhase(62);
-  the_mesh.setObserverHealthMarker(5);
-  unsigned long display_started = millis();
   ui_task.loop();
-  the_mesh.noteObserverTiming(5, millis() - display_started);
 #endif
-  the_mesh.setObserverHealthPhase(63);
   rtc_clock.tick();
-  the_mesh.setObserverHealthPhase(0);
 
+#ifdef HAS_EXTERNAL_WATCHDOG
+  external_watchdog.loop();
+#endif
   if (the_mesh.getNodePrefs()->powersaving_enabled && !the_mesh.hasPendingWork()) {
 #if defined(NRF52_PLATFORM)
     board.sleep(0); // nrf ignores seconds param, sleeps whenever possible

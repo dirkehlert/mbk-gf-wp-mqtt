@@ -4,16 +4,7 @@
 
 #include <SPI.h>
 #include <Wire.h>
-#include <Stream.h>
-#ifdef ENABLE_DISPLAY_DUMP
-#define E213DISPLAY_RESTORE_PROTECTED
-#define protected public
-#endif
 #include <heltec-eink-modules.h>
-#ifdef E213DISPLAY_RESTORE_PROTECTED
-#undef protected
-#undef E213DISPLAY_RESTORE_PROTECTED
-#endif
 #include <CRC32.h>
 #include <helpers/RefCountedDigitalPin.h>
 
@@ -25,9 +16,7 @@ class E213Display : public DisplayDriver {
   RefCountedDigitalPin* _periph_power;
   CRC32 display_crc;
   uint32_t last_display_crc_value = 0;
-  uint16_t partial_update_count = 0;
-  unsigned long last_full_refresh = 0;
-  bool force_full_refresh = true;
+  uint16_t _color;
 
 public:
   E213Display(RefCountedDigitalPin* periph_power = NULL) : DisplayDriver(250, 122), _periph_power(periph_power) {}
@@ -42,9 +31,9 @@ public:
   void turnOn() override;
   void turnOff() override;
   void clear() override;
-  void startFrame(Color bkg = DARK) override;
+  void startFrame(ColorVal bkg = UIColor::window_bkg) override;
   void setTextSize(int sz) override;
-  void setColor(Color c) override;
+  void setColor(ColorVal c) override;
   void setCursor(int x, int y) override;
   void print(const char *str) override;
   void fillRect(int x, int y, int w, int h) override;
@@ -52,9 +41,6 @@ public:
   void drawXbm(int x, int y, const uint8_t *bits, int w, int h) override;
   uint16_t getTextWidth(const char *str) override;
   void endFrame() override;
-#ifdef ENABLE_DISPLAY_DUMP
-  void dumpPBM(Stream& out);
-#endif
 
 private:
   BaseDisplay* detectEInk();

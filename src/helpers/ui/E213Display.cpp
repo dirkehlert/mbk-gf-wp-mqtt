@@ -2,13 +2,16 @@
 
 #include "../../MeshCore.h"
 
-#ifndef E213_FULL_REFRESH_UPDATES
-#define E213_FULL_REFRESH_UPDATES 30
-#endif
-
-#ifndef E213_FULL_REFRESH_INTERVAL_MS
-#define E213_FULL_REFRESH_INTERVAL_MS 900000UL
-#endif
+// Color scheme
+ColorVal UIColor::window_bkg = WHITE;
+ColorVal UIColor::title_bkg = WHITE;
+ColorVal UIColor::title_txt = BLACK;
+ColorVal UIColor::primary_txt = BLACK;
+ColorVal UIColor::secondary_txt = BLACK;
+ColorVal UIColor::warning_txt = BLACK;
+ColorVal UIColor::popup_bkg = WHITE;
+ColorVal UIColor::popup_txt = BLACK;
+ColorVal UIColor::corp_blue = BLACK;
 
 BaseDisplay* E213Display::detectEInk()
 {
@@ -59,9 +62,6 @@ bool E213Display::begin() {
 
   _init = true;
   _isOn = true;
-  last_full_refresh = millis();
-  partial_update_count = 0;
-  force_full_refresh = false;
 
   clear();
   display->fastmodeOn(); // Enable fast mode for quicker (partial) updates
@@ -104,7 +104,6 @@ void E213Display::turnOn() {
   else if (!_isOn) {
     powerOn();
     display->fastmodeOn();  // Reinitialize display controller after power was cut
-    force_full_refresh = true;
   }
   _isOn = true;
 }
@@ -118,22 +117,20 @@ void E213Display::turnOff() {
 
 void E213Display::clear() {
   display->clear();
-  last_full_refresh = millis();
-  partial_update_count = 0;
-  force_full_refresh = false;
-  last_display_crc_value = 0;
 }
 
-void E213Display::startFrame(Color bkg) {
+void E213Display::startFrame(ColorVal bkg) {
   display_crc.reset();
 
   // Fill screen with white first to ensure clean background
   display->fillRect(0, 0, width(), height(), WHITE);
 
-  if (bkg == LIGHT) {
+  if (bkg == 0) {
     // Fill with black if light background requested (inverted for e-ink)
     display->fillRect(0, 0, width(), height(), BLACK);
   }
+  _color = UIColor::primary_txt;
+  display->setTextColor(_color);
 }
 
 void E213Display::setTextSize(int sz) {
@@ -142,9 +139,10 @@ void E213Display::setTextSize(int sz) {
     display->setTextSize(sz);
 }
 
-void E213Display::setColor(Color c) {
-  display_crc.update<Color>(c);
-  // implemented in individual display methods
+void E213Display::setColor(ColorVal c) {
+  _color = c;
+  display_crc.update<ColorVal>(c);
+  display->setTextColor(_color);
 }
 
 void E213Display::setCursor(int x, int y) {
@@ -163,7 +161,7 @@ void E213Display::fillRect(int x, int y, int w, int h) {
   display_crc.update<int>(y);
   display_crc.update<int>(w);
   display_crc.update<int>(h);
-    display->fillRect(x, y, w, h, BLACK);
+    display->fillRect(x, y, w, h, _color);
 }
 
 void E213Display::drawRect(int x, int y, int w, int h) {
@@ -171,7 +169,7 @@ void E213Display::drawRect(int x, int y, int w, int h) {
   display_crc.update<int>(y);
   display_crc.update<int>(w);
   display_crc.update<int>(h);
-    display->drawRect(x, y, w, h, BLACK);
+    display->drawRect(x, y, w, h, _color);
 }
 
 void E213Display::drawXbm(int x, int y, const uint8_t *bits, int w, int h) {
@@ -195,7 +193,7 @@ void E213Display::drawXbm(int x, int y, const uint8_t *bits, int w, int h) {
 
       // If the bit is set, draw the pixel
       if (bitSet) {
-          display->drawPixel(x + bx, y + by, BLACK);
+          display->drawPixel(x + bx, y + by, _color);
       }
     }
   }
@@ -211,52 +209,7 @@ uint16_t E213Display::getTextWidth(const char *str) {
 void E213Display::endFrame() {
   uint32_t crc = display_crc.finalize();
   if (crc != last_display_crc_value) {
-    bool do_full_refresh = force_full_refresh ||
-      partial_update_count >= E213_FULL_REFRESH_UPDATES ||
-      (long)(millis() - last_full_refresh) >= (long)E213_FULL_REFRESH_INTERVAL_MS;
-
-    if (do_full_refresh) {
-      display->fastmodeOff();
-      display->update();
-      display->fastmodeOn(false);
-      last_full_refresh = millis();
-      partial_update_count = 0;
-      force_full_refresh = false;
-    } else {
-      display->update();
-      partial_update_count++;
-    }
+    display->update();
     last_display_crc_value = crc;
   }
 }
-
-#ifdef ENABLE_DISPLAY_DUMP
-void E213Display::dumpPBM(Stream& out) {
-  if (!display || !display->page_black) {
-    out.println("ERR no framebuffer");
-    return;
-  }
-
-  out.println("BEGIN_SCREEN_PBM");
-  out.println("P1");
-  out.print(width());
-  out.print(' ');
-  out.println(height());
-
-  for (int y = 0; y < height(); y++) {
-    for (int x = 0; x < width(); x++) {
-      // E213Display uses rotation 3: logical 250x122 maps to panel 128x250.
-      uint16_t px = y;
-      uint16_t py = (uint16_t)(width() - 1 - x);
-      uint16_t byte_offset = py * (128 / 8) + px / 8;
-      uint8_t bit_offset = 7 - (px % 8);
-      bool white = (display->page_black[byte_offset] >> bit_offset) & 0x01;
-
-      out.print(white ? '0' : '1');
-      if (x + 1 < width()) out.print(' ');
-    }
-    out.println();
-  }
-  out.println("END_SCREEN_PBM");
-}
-#endif

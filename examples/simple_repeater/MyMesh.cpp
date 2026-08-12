@@ -1,19 +1,5 @@
 #include "MyMesh.h"
-#include "UITask.h"
 #include <algorithm>
-#if defined(ESP32)
-#include <esp_system.h>
-#include <esp_sleep.h>
-#include <esp_attr.h>
-#include <driver/rtc_io.h>
-#include <freertos/FreeRTOS.h>
-#include <freertos/task.h>
-#endif
-#if defined(ENABLE_OBSERVER_WEB_AP) && defined(ESP32)
-#include <WiFi.h>
-#include <AsyncTCP.h>
-#include <ESPAsyncWebServer.h>
-#endif
 
 /* ------------------------------ Config -------------------------------- */
 
@@ -47,54 +33,6 @@
   #define ADMIN_PASSWORD "password"
 #endif
 
-#ifndef MQTT_OBSERVER_ENABLED
-  #define MQTT_OBSERVER_ENABLED 0
-#endif
-#ifndef MQTT_OBSERVER_TLS
-  #define MQTT_OBSERVER_TLS 1
-#endif
-#ifndef MQTT_OBSERVER_PORT
-  #define MQTT_OBSERVER_PORT 8883
-#endif
-#ifndef MQTT_OBSERVER_HOST
-  #define MQTT_OBSERVER_HOST ""
-#endif
-#ifndef MQTT_OBSERVER_USERNAME
-  #define MQTT_OBSERVER_USERNAME ""
-#endif
-#ifndef MQTT_OBSERVER_PASSWORD
-  #define MQTT_OBSERVER_PASSWORD ""
-#endif
-#ifndef MQTT_OBSERVER_TOPIC
-  #define MQTT_OBSERVER_TOPIC "meshcore/observer"
-#endif
-#ifndef MQTT_OBSERVER_WIFI_SSID
-  #define MQTT_OBSERVER_WIFI_SSID ""
-#endif
-#ifndef MQTT_OBSERVER_WIFI_PASSWORD
-  #define MQTT_OBSERVER_WIFI_PASSWORD ""
-#endif
-#ifndef OBSERVER_WEB_AP_SSID
-  #define OBSERVER_WEB_AP_SSID "MBK-GF-WP"
-#endif
-#ifndef OBSERVER_WEB_AP_PASSWORD
-  #define OBSERVER_WEB_AP_PASSWORD "observer2026"
-#endif
-#ifndef OBSERVER_WEB_VIEW_RETRY_MS
-  #define OBSERVER_WEB_VIEW_RETRY_MS 10000UL
-#endif
-#ifndef OBSERVER_WEB_VIEW_FALLBACK_MS
-  #define OBSERVER_WEB_VIEW_FALLBACK_MS 120000UL
-#endif
-
-#if defined(ESP32)
-  #define OBSERVER_LOCK() portENTER_CRITICAL(&observer_lock)
-  #define OBSERVER_UNLOCK() portEXIT_CRITICAL(&observer_lock)
-#else
-  #define OBSERVER_LOCK()
-  #define OBSERVER_UNLOCK()
-#endif
-
 #ifndef SERVER_RESPONSE_DELAY
   #define SERVER_RESPONSE_DELAY 300
 #endif
@@ -104,274 +42,6 @@
 #endif
 
 #define FIRMWARE_VER_LEVEL       2
-
-#define SAVEPOINT_INDEX_FILE     "/sp_index.csv"
-
-#define CLOCK_SYNC_MIN_TIME      1735689600UL  // 2025-01-01T00:00:00Z
-
-#if defined(ESP32)
-struct ObserverHealthBreadcrumb {
-  uint32_t magic;
-  uint32_t seq;
-  uint32_t uptime_s;
-  uint32_t rx_total;
-  uint32_t mqtt_total;
-  uint32_t free_heap;
-  uint32_t min_heap;
-  uint16_t batt_mv;
-  uint32_t boot_count;
-  uint32_t reset_reason;
-  uint32_t last_irq_count;
-  uint8_t screen;
-  uint8_t web_state;
-  uint8_t web_active;
-  uint8_t web_rejects;
-  uint8_t web_last;
-  uint8_t render_phase;
-  uint8_t marker;
-  uint16_t web_last_age_s;
-  uint16_t max_recv_raw_ms;
-  uint16_t max_decode_ms;
-  uint16_t max_forward_ms;
-  uint16_t max_display_ms;
-  uint16_t max_cli_ms;
-  uint16_t max_flood_ms;
-  uint32_t crc;
-};
-
-static RTC_NOINIT_ATTR ObserverHealthBreadcrumb observer_health_breadcrumb;
-static const uint32_t OBSERVER_HEALTH_MAGIC = 0x4D425748UL;  // MBWH
-static const unsigned long OBSERVER_HEALTH_UPDATE_MS = 10000;
-
-static uint32_t observerHealthCrc(const ObserverHealthBreadcrumb& item) {
-  uint32_t crc = 0xA5C35A5CUL;
-  crc ^= item.magic;
-  crc ^= item.seq;
-  crc ^= item.uptime_s;
-  crc ^= item.rx_total;
-  crc ^= item.mqtt_total;
-  crc ^= item.free_heap;
-  crc ^= item.min_heap;
-  crc ^= item.batt_mv;
-  crc ^= item.boot_count;
-  crc ^= item.reset_reason;
-  crc ^= item.last_irq_count;
-  crc ^= item.screen;
-  crc ^= item.web_state;
-  crc ^= item.web_active;
-  crc ^= item.web_rejects;
-  crc ^= item.web_last;
-  crc ^= item.render_phase;
-  crc ^= item.marker;
-  crc ^= item.web_last_age_s;
-  crc ^= item.max_recv_raw_ms;
-  crc ^= item.max_decode_ms;
-  crc ^= item.max_forward_ms;
-  crc ^= item.max_display_ms;
-  crc ^= item.max_cli_ms;
-  crc ^= item.max_flood_ms;
-  return crc;
-}
-
-static bool observerHealthValid(const ObserverHealthBreadcrumb& item) {
-  return item.magic == OBSERVER_HEALTH_MAGIC && item.crc == observerHealthCrc(item);
-}
-
-static const char* observerResetReasonString(esp_reset_reason_t reason) {
-  switch (reason) {
-    case ESP_RST_POWERON: return "PowerOn";
-    case ESP_RST_EXT: return "External";
-    case ESP_RST_SW: return "Software";
-    case ESP_RST_PANIC: return "Panic";
-    case ESP_RST_INT_WDT: return "IntWDT";
-    case ESP_RST_TASK_WDT: return "TaskWDT";
-    case ESP_RST_WDT: return "WDT";
-    case ESP_RST_DEEPSLEEP: return "Sleep";
-    case ESP_RST_BROWNOUT: return "Brownout";
-    case ESP_RST_SDIO: return "SDIO";
-    default: return "Unknown";
-  }
-}
-#endif
-#define CLOCK_SYNC_MAX_TIME      2051222400UL  // 2035-01-01T00:00:00Z
-
-enum ObserverTimingMarker : uint8_t {
-  OBS_MARKER_NONE = 0,
-  OBS_MARKER_RADIO_RECV = 1,
-  OBS_MARKER_PACKET_DECODE = 2,
-  OBS_MARKER_PACKET_FORWARD = 3,
-  OBS_MARKER_RADIO_SEND = 4,
-  OBS_MARKER_DISPLAY = 5,
-  OBS_MARKER_CLI = 6,
-  OBS_MARKER_FLOOD_ADVERT = 7,
-};
-
-static uint16_t observerClampDuration(uint32_t duration_ms) {
-  return duration_ms > 65535U ? 65535U : (uint16_t)duration_ms;
-}
-
-#if defined(ENABLE_OBSERVER_WEB_AP) && defined(ESP32)
-static const char OBSERVER_WEB_HTML[] PROGMEM = R"HTML(
-<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>MBK GF WP</title>
-<style>
-body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;margin:0;background:#f5f5f2;color:#111}
-main{max-width:720px;margin:0 auto;padding:18px}
-h1{font-size:24px;margin:8px 0 2px}
-h2{font-size:16px;margin:22px 0 8px}
-.muted{color:#555;font-size:13px}
-.panel{background:#fff;border:1px solid #ddd;border-radius:8px;padding:14px;margin-top:12px}
-button,a.btn{display:inline-block;border:1px solid #111;background:#111;color:#fff;border-radius:6px;padding:10px 12px;margin:4px 4px 4px 0;text-decoration:none;font-size:15px}
-button.secondary,a.secondary{background:#fff;color:#111}
-input{font:inherit;padding:9px;border:1px solid #aaa;border-radius:6px;width:100%;box-sizing:border-box;margin:4px 0 8px}
-table{width:100%;border-collapse:collapse;font-size:14px}
-td,th{border-bottom:1px solid #e4e4e0;padding:8px 4px;text-align:left}
-canvas{display:block;width:100%;height:148px}
-.load-row{display:grid;grid-template-columns:minmax(0,1fr) 76px;gap:10px;align-items:start}
-.load-side{font-size:12px;line-height:1.25;color:#222}
-.load-side b{display:block;font-size:15px;margin:1px 0 7px;text-align:right}
-.load-side span{display:block;text-align:right}
-.ok{color:#0a7a29}.err{color:#a40000}
-</style>
-</head>
-<body><main>
-<h1>WP Field Monitor</h1>
-<div class="muted" id="status">loading...</div>
-<div class="muted" id="status2"></div>
-<div class="muted" id="nodeTime"></div>
-
-<section class="panel">
-<h2>Load</h2>
-<div class="load-row">
-<canvas id="load"></canvas>
-<div class="load-side">
-<span>Scale</span><b id="loadScale">-</b>
-<span>Now</span><b id="loadNow">-</b>
-<span>Avg</span><b id="loadAvg">-</b>
-</div>
-</div>
-<div class="muted" id="loadLegend"></div>
-</section>
-
-<section class="panel">
-<h2>Heatstrip</h2>
-<div id="heat"></div>
-</section>
-
-<section class="panel">
-<h2>Time</h2>
-<button id="timeBtn" onclick="setTime()">Set from this device</button>
-<div class="muted" id="time"></div>
-</section>
-
-<section class="panel">
-<h2>Position</h2>
-<button id="posBtn" onclick="setPosition()">Use this device position</button>
-<input id="lat" placeholder="Latitude">
-<input id="lon" placeholder="Longitude">
-<button id="posSaveBtn" class="secondary" onclick="savePosition()">Save entered position</button>
-<div class="muted" id="pos"></div>
-</section>
-
-<section class="panel">
-<h2>Savepoints</h2>
-<button onclick="createSavepoint()">Create savepoint</button>
-<a class="btn secondary" href="/sp.list.csv">Export list CSV</a>
-<table><thead><tr><th>ID</th><th>UTC</th><th>RX</th><th>NF</th><th>CSV</th></tr></thead><tbody id="sp"></tbody></table>
-</section>
-
-<div class="muted" id="msg"></div>
-</main>
-<script>
-function msg(t,err){document.getElementById('msg').className=err?'err':'ok';document.getElementById('msg').textContent=t}
-async function refresh(){
-  const r=await fetch('/api/status'); const s=await r.json();
-  document.getElementById('status').textContent=s.node+' '+(s.view_mode?'View':'AP')+' '+location.host;
-  document.getElementById('status2').textContent='S: '+s.snr.toFixed(1)+' NF: '+s.nf+' Free: '+Math.floor(s.free_heap/1024)+'k Bat: '+s.batt_mv+'mV';
-  const nodeUtc=new Date(s.time*1000).toISOString();
-  document.getElementById('nodeTime').textContent='Node UTC: '+nodeUtc;
-  document.getElementById('timeBtn').disabled=s.view_mode;
-  document.getElementById('posBtn').disabled=s.view_mode;
-  document.getElementById('posSaveBtn').disabled=s.view_mode;
-  document.getElementById('time').textContent='Node UTC: '+nodeUtc;
-  document.getElementById('lat').value=s.lat.toFixed(6);
-  document.getElementById('lon').value=s.lon.toFixed(6);
-  document.getElementById('pos').textContent=s.lat.toFixed(6)+', '+s.lon.toFixed(6);
-  document.getElementById('sp').innerHTML=s.savepoints.map(p=>'<tr><td>'+p.id+'</td><td>'+p.time+'</td><td>'+p.rx+'</td><td>'+p.nf+'</td><td><a href="/sp.csv?id='+p.id+'">CSV</a></td></tr>').join('');
-}
-function drawLoad(m){
-  const c=document.getElementById('load'),ctx=c.getContext('2d'),rect=c.getBoundingClientRect(),dpr=window.devicePixelRatio||1;
-  c.width=Math.max(240,Math.floor(rect.width*dpr)); c.height=Math.floor(148*dpr); ctx.setTransform(dpr,0,0,dpr,0,0);
-  const w=rect.width,h=148,p=18,chartBottom=h-34;
-  ctx.clearRect(0,0,w,h); ctx.fillStyle='#fff'; ctx.fillRect(0,0,w,h); ctx.strokeStyle='#111';
-  ctx.beginPath(); ctx.moveTo(p,chartBottom); ctx.lineTo(w-p,chartBottom); ctx.moveTo(p,p); ctx.lineTo(p,chartBottom); ctx.stroke();
-  const vals=m.airtime_ms.map(v=>v/600), max=Math.max(1,...vals), bw=(w-2*p)/vals.length-4;
-  ctx.fillStyle='#111';
-  ctx.font='10px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif'; ctx.textAlign='center'; ctx.textBaseline='top';
-  vals.forEach((v,i)=>{
-    const slot=(w-2*p)/vals.length, bh=v/max*(chartBottom-p-8), x=p+i*slot+2, cx=x+bw/2;
-    ctx.fillStyle='#111'; ctx.fillRect(x,chartBottom-bh,bw,bh);
-    ctx.fillStyle='#555'; ctx.fillText(String(m.rx[i]),cx,chartBottom+6);
-  });
-  const now=vals.length?vals[vals.length-1]:0, avg=vals.reduce((a,b)=>a+b,0)/Math.max(1,vals.length);
-  document.getElementById('loadScale').textContent='0-'+max.toFixed(1)+'%';
-  document.getElementById('loadNow').textContent=now.toFixed(1)+'%';
-  document.getElementById('loadAvg').textContent=avg.toFixed(1)+'%';
-  document.getElementById('loadLegend').textContent='RX packets / min';
-}
-function drawHeat(m){
-  const rows=m.heat.rows, paths=m.heat.paths;
-  let html='<table><thead><tr><th>Rep</th>';
-  paths.forEach((p,i)=>html+='<th>P'+(i+1)+'</th>'); html+='<th>PC</th></tr></thead><tbody>';
-  rows.forEach(r=>{html+='<tr><td>'+r.rep+'</td>'; r.pos.forEach(v=>{const shade=v==1?'#111':v==2?'#666':v==3?'#aaa':'#eee'; html+='<td style="background:'+shade+'">&nbsp;</td>'}); html+='<td>'+r.pc+'</td></tr>'});
-  html+='</tbody></table>'; document.getElementById('heat').innerHTML=html;
-}
-async function refreshMonitor(){
-  const r=await fetch('/api/monitor'); const m=await r.json();
-  drawLoad(m); drawHeat(m);
-}
-async function post(url){const r=await fetch(url,{method:'POST'}); const t=await r.text(); msg(t,!r.ok); await refresh()}
-function setTime(){post('/api/time?epoch='+Math.floor(Date.now()/1000))}
-function createSavepoint(){post('/api/savepoint')}
-function savePosition(){post('/api/position?lat='+encodeURIComponent(lat.value)+'&lon='+encodeURIComponent(lon.value))}
-function setPosition(){
-  if(!navigator.geolocation){msg('Geolocation not available',true);return}
-  navigator.geolocation.getCurrentPosition(p=>{
-    lat.value=p.coords.latitude.toFixed(6); lon.value=p.coords.longitude.toFixed(6); savePosition();
-  },e=>msg(e.message,true),{enableHighAccuracy:true,timeout:15000,maximumAge:0});
-}
-let refreshBusy=false;
-async function refreshAll(){
-  if(refreshBusy) return;
-  refreshBusy=true;
-  try{await refresh();}
-  catch(e){msg(e.message,true)}
-  refreshBusy=false;
-}
-async function monitorTick(){try{await refreshMonitor();}catch(e){msg(e.message,true)}}
-refreshAll(); monitorTick(); setInterval(refreshAll,15000); setInterval(monitorTick,60000);
-</script></body></html>
-)HTML";
-
-static void handleObserverWebPosition(MyMesh* mesh, AsyncWebServerRequest* request) {
-  if (!mesh || !request->hasParam("lat") || !request->hasParam("lon")) {
-    request->send(400, "text/plain", "missing position");
-    return;
-  }
-  double lat = atof(request->getParam("lat")->value().c_str());
-  double lon = atof(request->getParam("lon")->value().c_str());
-  if (lat < -90.0 || lat > 90.0 || lon < -180.0 || lon > 180.0) {
-    request->send(400, "text/plain", "invalid position");
-    return;
-  }
-  mesh->setObserverPosition(lat, lon);
-  request->send(200, "text/plain", "position saved");
-}
-#endif
 
 #define REQ_TYPE_GET_STATUS         0x01 // same as _GET_STATS
 #define REQ_TYPE_KEEP_ALIVE         0x02
@@ -477,11 +147,10 @@ uint8_t MyMesh::handleLoginReq(const mesh::Identity& sender, const uint8_t* secr
 uint8_t MyMesh::handleAnonRegionsReq(const mesh::Identity& sender, uint32_t sender_timestamp, const uint8_t* data) {
   if (anon_limiter.allow(rtc_clock.getCurrentTime())) {
     // request data has: {reply-path-len}{reply-path}
-    reply_path_len = *data & 63;
-    reply_path_hash_size = (*data >> 6) + 1;
-    data++;
+    reply_path_len = *data++;
+    if (!mesh::Packet::isValidPathLen(reply_path_len)) return 0;  // reject - bad encoding
 
-    memcpy(reply_path, data, ((uint8_t)reply_path_len) * reply_path_hash_size);
+    mesh::Packet::writePath(reply_path, data, reply_path_len);
     // data += (uint8_t)reply_path_len * reply_path_hash_size;
 
     memcpy(reply_data, &sender_timestamp, 4);   // prefix with sender_timestamp, like a tag
@@ -496,11 +165,10 @@ uint8_t MyMesh::handleAnonRegionsReq(const mesh::Identity& sender, uint32_t send
 uint8_t MyMesh::handleAnonOwnerReq(const mesh::Identity& sender, uint32_t sender_timestamp, const uint8_t* data) {
   if (anon_limiter.allow(rtc_clock.getCurrentTime())) {
     // request data has: {reply-path-len}{reply-path}
-    reply_path_len = *data & 63;
-    reply_path_hash_size = (*data >> 6) + 1;
-    data++;
+    reply_path_len = *data++;
+    if (!mesh::Packet::isValidPathLen(reply_path_len)) return 0;  // reject - bad encoding
 
-    memcpy(reply_path, data, ((uint8_t)reply_path_len) * reply_path_hash_size);
+    mesh::Packet::writePath(reply_path, data, reply_path_len);
     // data += (uint8_t)reply_path_len * reply_path_hash_size;
 
     memcpy(reply_data, &sender_timestamp, 4);   // prefix with sender_timestamp, like a tag
@@ -516,11 +184,10 @@ uint8_t MyMesh::handleAnonOwnerReq(const mesh::Identity& sender, uint32_t sender
 uint8_t MyMesh::handleAnonClockReq(const mesh::Identity& sender, uint32_t sender_timestamp, const uint8_t* data) {
   if (anon_limiter.allow(rtc_clock.getCurrentTime())) {
     // request data has: {reply-path-len}{reply-path}
-    reply_path_len = *data & 63;
-    reply_path_hash_size = (*data >> 6) + 1;
-    data++;
+    reply_path_len = *data++;
+    if (!mesh::Packet::isValidPathLen(reply_path_len)) return 0;  // reject - bad encoding
 
-    memcpy(reply_path, data, ((uint8_t)reply_path_len) * reply_path_hash_size);
+    mesh::Packet::writePath(reply_path, data, reply_path_len);
     // data += (uint8_t)reply_path_len * reply_path_hash_size;
 
     memcpy(reply_data, &sender_timestamp, 4);   // prefix with sender_timestamp, like a tag
@@ -757,28 +424,14 @@ void MyMesh::sendFloodReply(mesh::Packet* packet, unsigned long delay_millis, ui
 }
 
 bool MyMesh::allowPacketForward(const mesh::Packet *packet) {
-  setObserverHealthPhase(36);
-  if (_prefs.disable_fwd) {
-    setObserverHealthPhase(0);
-    return false;
-  }
-  if (packet->isRouteFlood() && packet->getPathHashCount() >= _prefs.flood_max) {
-    setObserverHealthPhase(0);
-    return false;
-  }
-  if (packet->isRouteFlood() && packet->getRouteType() == ROUTE_TYPE_FLOOD &&
-      packet->getPathHashCount() >= _prefs.flood_max_unscoped) {
-    setObserverHealthPhase(0);
-    return false;
-  }
-  if (packet->isRouteFlood() && packet->getPayloadType() == PAYLOAD_TYPE_ADVERT &&
-      packet->getPathHashCount() >= _prefs.flood_max_advert) {
-    setObserverHealthPhase(0);
-    return false;
+  if (_prefs.disable_fwd) return false;
+  if (packet->isRouteFlood()) {
+    if (packet->getPathHashCount() >= _prefs.flood_max) return false;
+    if (packet->getRouteType() == ROUTE_TYPE_FLOOD && packet->getPathHashCount() >= _prefs.flood_max_unscoped) return false;
+    if (packet->getPayloadType() == PAYLOAD_TYPE_ADVERT && packet->getPathHashCount() >= _prefs.flood_max_advert) return false;
   }
   if (packet->isRouteFlood() && recv_pkt_region == NULL) {
     MESH_DEBUG_PRINTLN("allowPacketForward: unknown transport code, or wildcard not allowed for FLOOD packet");
-    setObserverHealthPhase(0);
     return false;
   }
   if (packet->isRouteFlood() && _prefs.loop_detect != LOOP_DETECT_OFF) {
@@ -792,11 +445,9 @@ bool MyMesh::allowPacketForward(const mesh::Packet *packet) {
     }
     if (isLooped(packet, maximums)) {
       MESH_DEBUG_PRINTLN("allowPacketForward: FLOOD packet loop detected!");
-      setObserverHealthPhase(0);
       return false;
     }
   }
-  setObserverHealthPhase(0);
   return true;
 }
 
@@ -819,36 +470,11 @@ void MyMesh::logRxRaw(float snr, float rssi, const uint8_t raw[], int len) {
 }
 
 void MyMesh::logRx(mesh::Packet *pkt, int len, float score) {
-  setObserverHealthPhase(5);
-  OBSERVER_LOCK();
-  observer_rx_packets++;
-  OBSERVER_UNLOCK();
-  setObserverHealthPhase(6);
-  int snr_x4 = (int)(_radio->getLastSNR() * 4);
-  if (snr_x4 > 127) snr_x4 = 127;
-  if (snr_x4 < -128) snr_x4 = -128;
-  setObserverHealthPhase(7);
-  rememberObserverPath(pkt);
-  setObserverHealthPhase(8);
-  rememberObserverLastHop(pkt, (int8_t)snr_x4);
-  setObserverHealthPhase(9);
-  rememberObserverScope(pkt);
-  setObserverHealthPhase(10);
 #ifdef WITH_BRIDGE
   if (_prefs.bridge_pkt_src == 1) {
     bridge.sendPacket(pkt);
   }
 #endif
-  setObserverHealthPhase(11);
-#ifdef WITH_MQTT_OBSERVER
-  if (mqtt_observer.sendPacket(pkt, true, (int)_radio->getLastRSSI(), snr_x4, getRTCClock()->getCurrentTime(),
-                               (int)(score * 1000))) {
-    OBSERVER_LOCK();
-    observer_mqtt_published++;
-    OBSERVER_UNLOCK();
-  }
-#endif
-  setObserverHealthPhase(11);
 
   if (_logging) {
     File f = openAppend(PACKET_LOG_FILE);
@@ -867,57 +493,6 @@ void MyMesh::logRx(mesh::Packet *pkt, int len, float score) {
       f.close();
     }
   }
-  setObserverHealthPhase(0);
-}
-
-void MyMesh::observeClockSyncSample(const mesh::Identity& id, uint32_t timestamp) {
-#ifdef ENABLE_OBSERVER_CLOCK_SYNC
-  if (observer_clock_sync_done) return;
-  if (timestamp < CLOCK_SYNC_MIN_TIME || timestamp > CLOCK_SYNC_MAX_TIME) return;
-
-  ObserverClockSyncSample& slot = observer_clock_sync_samples[observer_clock_sync_next];
-  slot.used = true;
-  slot.timestamp = timestamp;
-  memcpy(slot.pub_key, id.pub_key, PUB_KEY_SIZE);
-  observer_clock_sync_next = (observer_clock_sync_next + 1) % OBSERVER_CLOCK_SYNC_SAMPLES;
-  if (observer_clock_sync_count < OBSERVER_CLOCK_SYNC_SAMPLES) observer_clock_sync_count++;
-
-  if (observer_clock_sync_count < OBSERVER_CLOCK_SYNC_REQUIRED) return;
-
-  uint8_t distinct = 0;
-  uint32_t values[OBSERVER_CLOCK_SYNC_SAMPLES];
-  uint8_t value_count = 0;
-
-  for (uint8_t i = 0; i < OBSERVER_CLOCK_SYNC_SAMPLES; i++) {
-    if (!observer_clock_sync_samples[i].used) continue;
-    values[value_count++] = observer_clock_sync_samples[i].timestamp;
-
-    bool seen = false;
-    for (uint8_t j = 0; j < i; j++) {
-      if (!observer_clock_sync_samples[j].used) continue;
-      if (memcmp(observer_clock_sync_samples[i].pub_key, observer_clock_sync_samples[j].pub_key, PUB_KEY_SIZE) == 0) {
-        seen = true;
-        break;
-      }
-    }
-    if (!seen) distinct++;
-  }
-
-  if (value_count < OBSERVER_CLOCK_SYNC_REQUIRED || distinct < OBSERVER_CLOCK_SYNC_DISTINCT) return;
-
-  std::sort(values, values + value_count);
-  uint32_t candidate = values[value_count / 2] + 1;
-  uint32_t current = getRTCClock()->getCurrentTime();
-  if (candidate > current + 60) {
-    getRTCClock()->setCurrentTime(candidate);
-    observer_clock_synced_at = candidate;
-    observer_clock_synced = true;
-  }
-  observer_clock_sync_done = true;
-#else
-  (void)id;
-  (void)timestamp;
-#endif
 }
 
 void MyMesh::logTx(mesh::Packet *pkt, int len) {
@@ -925,9 +500,6 @@ void MyMesh::logTx(mesh::Packet *pkt, int len) {
   if (_prefs.bridge_pkt_src == 0) {
     bridge.sendPacket(pkt);
   }
-#endif
-#ifdef WITH_MQTT_OBSERVER
-  mqtt_observer.sendPacket(pkt, false, 0, (int)(pkt->getSNR() * 4), getRTCClock()->getCurrentTime(), 0);
 #endif
 
   if (_logging) {
@@ -974,9 +546,7 @@ uint32_t MyMesh::getDirectRetransmitDelay(const mesh::Packet *packet) {
   return getRNG()->nextInt(0, 5*t + 1);
 }
 
-bool MyMesh::filterRecvFloodPacket(mesh::Packet* pkt) {
-  setObserverHealthPhase(37);
-  // just try to determine region for packet (apply later in allowPacketForward())
+mesh::DispatcherAction MyMesh::onRecvPacket(mesh::Packet* pkt) {
   if (pkt->getRouteType() == ROUTE_TYPE_TRANSPORT_FLOOD) {
     recv_pkt_region = region_map.findMatch(pkt, REGION_DENY_FLOOD);
   } else if (pkt->getRouteType() == ROUTE_TYPE_FLOOD) {
@@ -988,13 +558,11 @@ bool MyMesh::filterRecvFloodPacket(mesh::Packet* pkt) {
   } else {
     recv_pkt_region = NULL;
   }
-  // do normal processing
-  return false;
+  return Mesh::onRecvPacket(pkt);
 }
 
 void MyMesh::onAnonDataRecv(mesh::Packet *packet, const uint8_t *secret, const mesh::Identity &sender,
                             uint8_t *data, size_t len) {
-  setObserverHealthPhase(38);
   if (packet->getPayloadType() == PAYLOAD_TYPE_ANON_REQ) { // received an initial request by a possible admin
                                                            // client (unknown at this stage)
     uint32_t timestamp;
@@ -1003,50 +571,37 @@ void MyMesh::onAnonDataRecv(mesh::Packet *packet, const uint8_t *secret, const m
     data[len] = 0;  // ensure null terminator
     uint8_t reply_len;
 
-    reply_path_len = -1;
+    reply_path_len = 0xFF;
     if (data[4] == 0 || data[4] >= ' ') {   // is password, ie. a login request
-      setObserverHealthPhase(39);
       reply_len = handleLoginReq(sender, secret, timestamp, &data[4], packet->isRouteFlood());
     } else if (data[4] == ANON_REQ_TYPE_REGIONS && packet->isRouteDirect()) {
-      setObserverHealthPhase(40);
       reply_len = handleAnonRegionsReq(sender, timestamp, &data[5]);
     } else if (data[4] == ANON_REQ_TYPE_OWNER && packet->isRouteDirect()) {
-      setObserverHealthPhase(41);
       reply_len = handleAnonOwnerReq(sender, timestamp, &data[5]);
     } else if (data[4] == ANON_REQ_TYPE_BASIC && packet->isRouteDirect()) {
-      setObserverHealthPhase(42);
       reply_len = handleAnonClockReq(sender, timestamp, &data[5]);
     } else {
       reply_len = 0;  // unknown/invalid request type
     }
 
-    if (reply_len == 0) {
-      setObserverHealthPhase(0);
-      return;   // invalid request
-    }
+    if (reply_len == 0) return;   // invalid request
 
     if (packet->isRouteFlood()) {
-      setObserverHealthPhase(43);
       // let this sender know path TO here, so they can use sendDirect(), and ALSO encode the response
       mesh::Packet* path = createPathReturn(sender, secret, packet->path, packet->path_len,
                                             PAYLOAD_TYPE_RESPONSE, reply_data, reply_len);
       if (path) sendFloodReply(path, SERVER_RESPONSE_DELAY, packet->getPathHashSize());
-    } else if (reply_path_len < 0) {
-      setObserverHealthPhase(44);
+    } else if (reply_path_len == 0xFF) {
       mesh::Packet* reply = createDatagram(PAYLOAD_TYPE_RESPONSE, sender, secret, reply_data, reply_len);
       if (reply) sendFloodReply(reply, SERVER_RESPONSE_DELAY, packet->getPathHashSize());
     } else {
-      setObserverHealthPhase(45);
       mesh::Packet* reply = createDatagram(PAYLOAD_TYPE_RESPONSE, sender, secret, reply_data, reply_len);
-      uint8_t path_len = ((reply_path_hash_size - 1) << 6) | (reply_path_len & 63);
-      if (reply) sendDirect(reply, reply_path,  path_len, SERVER_RESPONSE_DELAY);
+      if (reply) sendDirect(reply, reply_path, reply_path_len, SERVER_RESPONSE_DELAY);
     }
   }
-  setObserverHealthPhase(0);
 }
 
 int MyMesh::searchPeersByHash(const uint8_t *hash) {
-  setObserverHealthPhase(46);
   int n = 0;
   for (int i = 0; i < acl.getNumClients(); i++) {
     if (acl.getClientByIdx(i)->id.isHashMatch(hash)) {
@@ -1057,7 +612,6 @@ int MyMesh::searchPeersByHash(const uint8_t *hash) {
 }
 
 void MyMesh::getPeerSharedSecret(uint8_t *dest_secret, int peer_idx) {
-  setObserverHealthPhase(47);
   int i = matching_peer_indexes[peer_idx];
   if (i >= 0 && i < acl.getNumClients()) {
     // lookup pre-calculated shared_secret
@@ -1076,53 +630,38 @@ static bool isShare(const mesh::Packet *packet) {
 
 void MyMesh::onAdvertRecv(mesh::Packet *packet, const mesh::Identity &id, uint32_t timestamp,
                           const uint8_t *app_data, size_t app_data_len) {
-  setObserverHealthPhase(18);
   mesh::Mesh::onAdvertRecv(packet, id, timestamp, app_data, app_data_len); // chain to super impl
-#ifdef ENABLE_OBSERVER_CLOCK_SYNC
-  setObserverHealthPhase(19);
-  observeClockSyncSample(id, timestamp);
-#endif
 
   // if this a zero hop advert (and not via 'Share'), add it to neighbours
-  setObserverHealthPhase(20);
   if (packet->getPathHashCount() == 0 && !isShare(packet)) {
     AdvertDataParser parser(app_data, app_data_len);
     if (parser.isValid() && parser.getType() == ADV_TYPE_REPEATER) { // just keep neigbouring Repeaters
       putNeighbour(id, timestamp, packet->getSNR());
     }
   }
-  setObserverHealthPhase(0);
 }
 
 void MyMesh::onPeerDataRecv(mesh::Packet *packet, uint8_t type, int sender_idx, const uint8_t *secret,
                             uint8_t *data, size_t len) {
-  setObserverHealthPhase(21);
   int i = matching_peer_indexes[sender_idx];
   if (i < 0 || i >= acl.getNumClients()) { // get from our known_clients table (sender SHOULD already be known in this context)
     MESH_DEBUG_PRINTLN("onPeerDataRecv: invalid peer idx: %d", i);
-    setObserverHealthPhase(0);
     return;
   }
   ClientInfo* client = acl.getClientByIdx(i);
 
   if (type == PAYLOAD_TYPE_REQ) { // request (from a Known admin client!)
-    setObserverHealthPhase(22);
     uint32_t timestamp;
     memcpy(&timestamp, data, 4);
 
     if (timestamp > client->last_timestamp) { // prevent replay attacks
-      setObserverHealthPhase(23);
       int reply_len = handleRequest(client, timestamp, &data[4], len - 4);
-      if (reply_len == 0) {
-        setObserverHealthPhase(0);
-        return; // invalid command
-      }
+      if (reply_len == 0) return; // invalid command
 
       client->last_timestamp = timestamp;
       client->last_activity = getRTCClock()->getCurrentTime();
 
       if (packet->isRouteFlood()) {
-        setObserverHealthPhase(24);
         // let this sender know path TO here, so they can use sendDirect(), and ALSO encode the response
         mesh::Packet *path = createPathReturn(client->id, secret, packet->path, packet->path_len,
                                               PAYLOAD_TYPE_RESPONSE, reply_data, reply_len);
@@ -1142,7 +681,6 @@ void MyMesh::onPeerDataRecv(mesh::Packet *packet, uint8_t type, int sender_idx, 
       MESH_DEBUG_PRINTLN("onPeerDataRecv: possible replay attack detected");
     }
   } else if (type == PAYLOAD_TYPE_TXT_MSG && len > 5 && client->isAdmin()) { // a CLI command
-    setObserverHealthPhase(25);
     uint32_t sender_timestamp;
     memcpy(&sender_timestamp, data, 4); // timestamp (by sender's RTC clock - which could be wrong)
     uint8_t flags = (data[4] >> 2);        // message attempt number, and other flags
@@ -1158,7 +696,6 @@ void MyMesh::onPeerDataRecv(mesh::Packet *packet, uint8_t type, int sender_idx, 
       data[len] = 0; // need to make a C string again, with null terminator
 
       if (flags == TXT_TYPE_PLAIN) { // for legacy CLI, send Acks
-        setObserverHealthPhase(26);
         uint32_t ack_hash; // calc truncated hash of the message timestamp + text + sender pub_key, to prove
                            // to sender that we got it
         mesh::Utils::sha256((uint8_t *)&ack_hash, 4, data, 5 + strlen((char *)&data[5]), client->id.pub_key,
@@ -1180,12 +717,10 @@ void MyMesh::onPeerDataRecv(mesh::Packet *packet, uint8_t type, int sender_idx, 
       if (is_retry) {
         *reply = 0;
       } else {
-        setObserverHealthPhase(27);
         handleCommand(sender_timestamp, command, reply);
       }
       int text_len = strlen(reply);
       if (text_len > 0) {
-        setObserverHealthPhase(28);
         uint32_t timestamp = getRTCClock()->getCurrentTimeUnique();
         if (timestamp == sender_timestamp) {
           // WORKAROUND: the two timestamps need to be different, in the CLI view
@@ -1207,12 +742,10 @@ void MyMesh::onPeerDataRecv(mesh::Packet *packet, uint8_t type, int sender_idx, 
       MESH_DEBUG_PRINTLN("onPeerDataRecv: possible replay attack detected");
     }
   }
-  setObserverHealthPhase(0);
 }
 
 bool MyMesh::onPeerPathRecv(mesh::Packet *packet, int sender_idx, const uint8_t *secret, uint8_t *path,
                             uint8_t path_len, uint8_t extra_type, uint8_t *extra, uint8_t extra_len) {
-  setObserverHealthPhase(29);
   // TODO: prevent replay attacks
   int i = matching_peer_indexes[sender_idx];
 
@@ -1228,7 +761,6 @@ bool MyMesh::onPeerPathRecv(mesh::Packet *packet, int sender_idx, const uint8_t 
   }
 
   // NOTE: no reciprocal path send!!
-  setObserverHealthPhase(0);
   return false;
 }
 
@@ -1236,12 +768,10 @@ bool MyMesh::onPeerPathRecv(mesh::Packet *packet, int sender_idx, const uint8_t 
 #define CTL_TYPE_NODE_DISCOVER_RESP  0x90
 
 void MyMesh::onControlDataRecv(mesh::Packet* packet) {
-  setObserverHealthPhase(30);
   uint8_t type = packet->payload[0] & 0xF0;    // just test upper 4 bits
   if (type == CTL_TYPE_NODE_DISCOVER_REQ && packet->payload_len >= 6
       && !_prefs.disable_fwd && discover_limiter.allow(rtc_clock.getCurrentTime())
   ) {
-    setObserverHealthPhase(31);
     int i = 1;
     uint8_t  filter = packet->payload[i++];
     uint32_t tag;
@@ -1254,7 +784,6 @@ void MyMesh::onControlDataRecv(mesh::Packet* packet) {
     }
 
     if ((filter & (1 << ADV_TYPE_REPEATER)) != 0 && _prefs.discovery_mod_timestamp >= since) {
-      setObserverHealthPhase(32);
       bool prefix_only = packet->payload[0] & 1;
       uint8_t data[6 + PUB_KEY_SIZE];
       data[0] = CTL_TYPE_NODE_DISCOVER_RESP | ADV_TYPE_REPEATER;   // low 4-bits for node type
@@ -1263,44 +792,35 @@ void MyMesh::onControlDataRecv(mesh::Packet* packet) {
       memcpy(&data[6], self_id.pub_key, PUB_KEY_SIZE);
       auto resp = createControlData(data, prefix_only ? 6 + 8 : 6 + PUB_KEY_SIZE);
       if (resp) {
-        setObserverHealthPhase(33);
         sendZeroHop(resp, getRetransmitDelay(resp)*4);  // apply random delay (widened x4), as multiple nodes can respond to this
       }
     }
   } else if (type == CTL_TYPE_NODE_DISCOVER_RESP && packet->payload_len >= 6) {
-    setObserverHealthPhase(34);
     uint8_t node_type = packet->payload[0] & 0x0F;
     if (node_type != ADV_TYPE_REPEATER) {
-      setObserverHealthPhase(0);
       return;
     }
     if (packet->payload_len < 6 + PUB_KEY_SIZE) {
       MESH_DEBUG_PRINTLN("onControlDataRecv: DISCOVER_RESP pubkey too short: %d", (uint32_t)packet->payload_len);
-      setObserverHealthPhase(0);
       return;
     }
 
     if (pending_discover_tag == 0 || millisHasNowPassed(pending_discover_until)) {
       pending_discover_tag = 0;
-      setObserverHealthPhase(0);
       return;
     }
     uint32_t tag;
     memcpy(&tag, &packet->payload[2], 4);
     if (tag != pending_discover_tag) {
-      setObserverHealthPhase(0);
       return;
     }
 
     mesh::Identity id(&packet->payload[6]);
     if (id.matches(self_id)) {
-      setObserverHealthPhase(0);
       return;
     }
-    setObserverHealthPhase(35);
     putNeighbour(id, rtc_clock.getCurrentTime(), packet->getSNR());
   }
-  setObserverHealthPhase(0);
 }
 
 void MyMesh::sendNodeDiscoverReq() {
@@ -1333,120 +853,21 @@ MyMesh::MyMesh(mesh::MainBoard &board, mesh::Radio &radio, mesh::MillisecondCloc
 #if defined(WITH_ESPNOW_BRIDGE)
       , bridge(&_prefs, _mgr, &rtc)
 #endif
-#if defined(WITH_MQTT_OBSERVER)
-      , mqtt_observer(&_prefs, &self_id)
-#endif
 {
-  _board = &board;
-  _ui_task = nullptr;
   last_millis = 0;
   uptime_millis = 0;
   next_local_advert = next_flood_advert = 0;
   dirty_contacts_expiry = 0;
   set_radio_at = revert_radio_at = 0;
-  observer_rx_packets = 0;
-  observer_mqtt_published = 0;
-  observer_path_next = 0;
-  observer_next_health_at = 10000;
-  observer_health_screen = 0;
-  observer_health_phase = 0;
-  observer_health_marker = OBS_MARKER_NONE;
-  observer_prev_health_valid = false;
-  observer_prev_health_screen = 0;
-  observer_prev_health_phase = 0;
-  observer_prev_health_marker = OBS_MARKER_NONE;
-  observer_prev_health_web_state = 0;
-  observer_prev_health_web_active = 0;
-  observer_prev_health_web_rejects = 0;
-  observer_prev_health_web_last = 0;
-  observer_prev_health_web_last_age_s = 0;
-  observer_prev_health_uptime_s = 0;
-  observer_prev_health_rx = 0;
-  observer_prev_health_free_heap = 0;
-  observer_prev_health_min_heap = 0;
-  observer_prev_health_batt_mv = 0;
-  observer_prev_health_boot_count = 0;
-  observer_prev_health_reset_reason = 0;
-  observer_prev_health_last_irq = 0;
-  observer_prev_health_max_recv_ms = 0;
-  observer_prev_health_max_decode_ms = 0;
-  observer_prev_health_max_forward_ms = 0;
-  observer_prev_health_max_display_ms = 0;
-  observer_prev_health_max_cli_ms = 0;
-  observer_prev_health_max_flood_ms = 0;
-  observer_max_decode_ms = 0;
-  observer_max_forward_ms = 0;
-  observer_max_display_ms = 0;
-  observer_max_cli_ms = 0;
-  observer_max_flood_ms = 0;
-  observer_boot_health_started = false;
-#if defined(ENABLE_OBSERVER_WEB_AP) && defined(ESP32)
-  observer_web_server = nullptr;
-  observer_web_ap_running = false;
-  observer_web_sta_running = false;
-  observer_web_sta_next_attempt = 0;
-  observer_web_sta_started_at = 0;
-  observer_web_next_rollover = 60000;
-  observer_web_prev_rx_total = 0;
-  observer_web_prev_air_ms = 0;
-  observer_web_bin_index = 0;
-  observer_web_request_busy = false;
-  observer_web_active_handler = 0;
-  observer_web_last_handler = 0;
-  observer_web_last_at = 0;
-  observer_web_rejects = 0;
-  memset(observer_web_rx_bins, 0, sizeof(observer_web_rx_bins));
-  memset(observer_web_air_bins, 0, sizeof(observer_web_air_bins));
-#endif
-#if defined(ESP32)
-  if (observerHealthValid(observer_health_breadcrumb)) {
-    observer_prev_health_valid = true;
-    observer_prev_health_screen = observer_health_breadcrumb.screen;
-    observer_prev_health_phase = observer_health_breadcrumb.render_phase;
-    observer_prev_health_web_state = observer_health_breadcrumb.web_state;
-    observer_prev_health_web_active = observer_health_breadcrumb.web_active;
-    observer_prev_health_web_rejects = observer_health_breadcrumb.web_rejects;
-    observer_prev_health_web_last = observer_health_breadcrumb.web_last;
-    observer_prev_health_web_last_age_s = observer_health_breadcrumb.web_last_age_s;
-    observer_prev_health_uptime_s = observer_health_breadcrumb.uptime_s;
-    observer_prev_health_rx = observer_health_breadcrumb.rx_total;
-    observer_prev_health_free_heap = observer_health_breadcrumb.free_heap;
-    observer_prev_health_min_heap = observer_health_breadcrumb.min_heap;
-    observer_prev_health_batt_mv = observer_health_breadcrumb.batt_mv;
-    observer_prev_health_boot_count = observer_health_breadcrumb.boot_count;
-    observer_prev_health_reset_reason = observer_health_breadcrumb.reset_reason;
-    observer_prev_health_last_irq = observer_health_breadcrumb.last_irq_count;
-    observer_prev_health_marker = observer_health_breadcrumb.marker;
-    observer_prev_health_max_recv_ms = observer_health_breadcrumb.max_recv_raw_ms;
-    observer_prev_health_max_decode_ms = observer_health_breadcrumb.max_decode_ms;
-    observer_prev_health_max_forward_ms = observer_health_breadcrumb.max_forward_ms;
-    observer_prev_health_max_display_ms = observer_health_breadcrumb.max_display_ms;
-    observer_prev_health_max_cli_ms = observer_health_breadcrumb.max_cli_ms;
-    observer_prev_health_max_flood_ms = observer_health_breadcrumb.max_flood_ms;
-  }
-#endif
-#ifdef ENABLE_OBSERVER_CLOCK_SYNC
-  observer_clock_sync_next = 0;
-  observer_clock_sync_count = 0;
-  observer_clock_synced = false;
-  observer_clock_sync_done = false;
-  observer_clock_synced_at = 0;
-#endif
-  memset(observer_paths, 0, sizeof(observer_paths));
-  memset(observer_last_hops, 0, sizeof(observer_last_hops));
-  memset(observer_scopes, 0, sizeof(observer_scopes));
-#ifdef ENABLE_OBSERVER_CLOCK_SYNC
-  memset(observer_clock_sync_samples, 0, sizeof(observer_clock_sync_samples));
-#endif
   _logging = false;
   region_load_active = false;
+  recv_pkt_region = NULL;
 
 #if MAX_NEIGHBOURS
   memset(neighbours, 0, sizeof(neighbours));
 #endif
 
   // defaults
-  memset(&_prefs, 0, sizeof(_prefs));
   _prefs.airtime_factor = 1.0;
   _prefs.rx_delay_base = 0.0f;   // turn off by default, was 10.0;
   _prefs.tx_delay_factor = 0.5f; // was 0.25f
@@ -1466,6 +887,7 @@ MyMesh::MyMesh(mesh::MainBoard &board, mesh::Radio &radio, mesh::MillisecondCloc
   _prefs.flood_max_unscoped = 64;
   _prefs.flood_max_advert = 8;
   _prefs.interference_threshold = 0; // disabled
+  _prefs.cad_enabled = 0;            // hardware CAD before TX (off by default; 'set cad on')
 
   // bridge defaults
   _prefs.bridge_enabled = 1;    // enabled
@@ -1475,19 +897,6 @@ MyMesh::MyMesh(mesh::MainBoard &board, mesh::Radio &radio, mesh::MillisecondCloc
   _prefs.bridge_channel = 1;    // channel 1
 
   StrHelper::strncpy(_prefs.bridge_secret, "LVSITANOS", sizeof(_prefs.bridge_secret));
-
-#ifdef WITH_MQTT_OBSERVER
-  _prefs.disable_fwd = 1;
-  _prefs.mqtt_enabled = MQTT_OBSERVER_ENABLED;
-  _prefs.mqtt_tls = MQTT_OBSERVER_TLS;
-  _prefs.mqtt_port = MQTT_OBSERVER_PORT;
-  StrHelper::strncpy(_prefs.wifi_ssid, MQTT_OBSERVER_WIFI_SSID, sizeof(_prefs.wifi_ssid));
-  StrHelper::strncpy(_prefs.wifi_password, MQTT_OBSERVER_WIFI_PASSWORD, sizeof(_prefs.wifi_password));
-  StrHelper::strncpy(_prefs.mqtt_host, MQTT_OBSERVER_HOST, sizeof(_prefs.mqtt_host));
-  StrHelper::strncpy(_prefs.mqtt_username, MQTT_OBSERVER_USERNAME, sizeof(_prefs.mqtt_username));
-  StrHelper::strncpy(_prefs.mqtt_password, MQTT_OBSERVER_PASSWORD, sizeof(_prefs.mqtt_password));
-  StrHelper::strncpy(_prefs.mqtt_topic, MQTT_OBSERVER_TOPIC, sizeof(_prefs.mqtt_topic));
-#endif
 
   // GPS defaults
   _prefs.gps_enabled = 0;
@@ -1503,6 +912,7 @@ MyMesh::MyMesh(mesh::MainBoard &board, mesh::Radio &radio, mesh::MillisecondCloc
   _prefs.rx_boosted_gain = 1; // enabled by default;
 #endif
 #endif
+  _prefs.radio_fem_rxgain = 1;
 
   pending_discover_tag = 0;
   pending_discover_until = 0;
@@ -1511,8 +921,6 @@ MyMesh::MyMesh(mesh::MainBoard &board, mesh::Radio &radio, mesh::MillisecondCloc
 }
 
 void MyMesh::begin(FILESYSTEM *fs) {
-  beginObserverHealthBoot();
-
   mesh::Mesh::begin();
   _fs = fs;
   // load persisted prefs
@@ -1547,18 +955,13 @@ void MyMesh::begin(FILESYSTEM *fs) {
   }
 #endif
 
-#if defined(WITH_MQTT_OBSERVER)
-  if (_prefs.mqtt_enabled) {
-    mqtt_observer.begin();
-  }
-#endif
-
   radio_driver.setParams(_prefs.freq, _prefs.bw, _prefs.sf, _prefs.cr);
   radio_driver.setTxPower(_prefs.tx_power_dbm);
 
   radio_driver.setRxBoostedGainMode(_prefs.rx_boosted_gain);
   MESH_DEBUG_PRINTLN("RX Boosted Gain Mode: %s",
                      radio_driver.getRxBoostedGainMode() ? "Enabled" : "Disabled");
+  board.setLoRaFemLnaEnabled(_prefs.radio_fem_rxgain);
 
   updateAdvertTimer();
   updateFloodAdvertTimer();
@@ -1567,14 +970,6 @@ void MyMesh::begin(FILESYSTEM *fs) {
 
 #if ENV_INCLUDE_GPS == 1
   applyGpsPrefs();
-#endif
-
-#if defined(ENABLE_OBSERVER_WEB_AP) && defined(ESP32) && defined(OBSERVER_WEB_VIEW_DEFAULT_ON)
-  if (!startObserverWebStaView(nullptr, 0)) {
-    startObserverWebAp(nullptr, 0);
-  }
-#elif defined(ENABLE_OBSERVER_WEB_AP) && defined(ESP32) && defined(OBSERVER_WEB_AP_DEFAULT_ON)
-  startObserverWebAp(nullptr, 0);
 #endif
 }
 
@@ -1587,1601 +982,6 @@ void MyMesh::sendFloodScoped(const TransportKey& scope, mesh::Packet* pkt, uint3
     codes[1] = 0;  // REVISIT: set to 'home' Region, for sender/return region?
     sendFlood(pkt, codes, delay_millis, path_hash_size);
   }
-}
-
-const char* MyMesh::getObserverMqttStatus() {
-#ifdef WITH_MQTT_OBSERVER
-  if (!_prefs.mqtt_enabled) return "off";
-  if (!mqtt_observer.isRunning()) return "stopped";
-  if (!mqtt_observer.isWifiConnected()) return "wifi...";
-  if (!mqtt_observer.isMqttConnected()) return "mqtt...";
-  return "ok";
-#else
-  return "n/a";
-#endif
-}
-
-const char* MyMesh::getObserverMqttLastError() const {
-#ifdef WITH_MQTT_OBSERVER
-  const char* err = mqtt_observer.lastError();
-  return err && err[0] ? err : "none";
-#else
-  return "n/a";
-#endif
-}
-
-uint32_t MyMesh::getObserverMqttPublishFailures() const {
-#ifdef WITH_MQTT_OBSERVER
-  return mqtt_observer.publishFailures();
-#else
-  return 0;
-#endif
-}
-
-uint32_t MyMesh::getObserverMqttWifiFailures() const {
-#ifdef WITH_MQTT_OBSERVER
-  return mqtt_observer.wifiFailures();
-#else
-  return 0;
-#endif
-}
-
-uint32_t MyMesh::getObserverMqttConnectFailures() const {
-#ifdef WITH_MQTT_OBSERVER
-  return mqtt_observer.mqttFailures();
-#else
-  return 0;
-#endif
-}
-
-int MyMesh::getObserverMqttState() const {
-#ifdef WITH_MQTT_OBSERVER
-  return mqtt_observer.lastMqttState();
-#else
-  return 0;
-#endif
-}
-
-void MyMesh::setObserverMqttEnabled(bool enabled) {
-#ifdef WITH_MQTT_OBSERVER
-  if (_prefs.mqtt_enabled == enabled && mqtt_observer.isRunning() == enabled) return;
-  if (enabled) {
-#if defined(ENABLE_OBSERVER_WEB_AP) && defined(ESP32)
-    if (observer_web_ap_running) stopObserverWebAp();
-    if (observer_web_sta_running) stopObserverWebStaView();
-#endif
-  }
-  _prefs.mqtt_enabled = enabled ? 1 : 0;
-  _cli.savePrefs(_fs);
-  if (enabled) {
-    mqtt_observer.begin();
-  } else {
-    mqtt_observer.end();
-  }
-#endif
-}
-
-bool MyMesh::toggleObserverMqttEnabled() {
-#ifdef WITH_MQTT_OBSERVER
-  bool enabled = !_prefs.mqtt_enabled;
-  setObserverMqttEnabled(enabled);
-  return enabled;
-#else
-  return false;
-#endif
-}
-
-void MyMesh::rememberObserverPath(const mesh::Packet* packet) {
-  setObserverHealthPhase(12);
-  uint8_t hash_size = packet->getPathHashSize();
-  uint8_t hash_count = packet->getPathHashCount();
-  uint8_t display_hops = min((uint8_t)OBSERVER_PATH_DISPLAY_HOPS, hash_count);
-  char text[OBSERVER_PATH_TEXT_SIZE];
-  char key[OBSERVER_PATH_KEY_SIZE];
-  int key_written = snprintf(key, sizeof(key), "%u:", (unsigned int)hash_size);
-  size_t key_pos = key_written > 0 ? (size_t)key_written : 0;
-  if (hash_count == 0) {
-    snprintf(text, sizeof(text), "-");
-  } else {
-    size_t pos = 0;
-    const char* hex = "0123456789ABCDEF";
-    for (uint8_t n = 0; n < display_hops && pos + 2 < sizeof(text); n++) {
-      uint8_t i = hash_count - n;
-      if (n > 0 && pos + 1 < sizeof(text)) text[pos++] = ' ';
-      const uint8_t* hash = &packet->path[(i - 1) * hash_size];
-      for (uint8_t j = 0; j < hash_size && pos + 2 < sizeof(text); j++) {
-        text[pos++] = hex[hash[j] >> 4];
-        text[pos++] = hex[hash[j] & 0x0F];
-      }
-    }
-    text[pos] = 0;
-  }
-
-  const char* hex = "0123456789ABCDEF";
-  for (uint8_t n = 0; n < display_hops && key_pos + 2 < sizeof(key); n++) {
-    uint8_t i = hash_count - n;
-    const uint8_t* hash = &packet->path[(i - 1) * hash_size];
-    for (uint8_t j = 0; j < hash_size && key_pos + 2 < sizeof(key); j++) {
-      key[key_pos++] = hex[hash[j] >> 4];
-      key[key_pos++] = hex[hash[j] & 0x0F];
-    }
-  }
-  key[key_pos] = 0;
-
-  unsigned long now = millis();
-  setObserverHealthPhase(13);
-  OBSERVER_LOCK();
-  for (uint8_t i = 0; i < OBSERVER_PATH_HISTORY_SIZE; i++) {
-    ObserverPathInfo& existing = observer_paths[i];
-    if (existing.seen_at == 0) continue;
-    if (strcmp(existing.key, key) == 0) {
-      existing.seen_at = now;
-      if (existing.count < 0xFFFF) existing.count++;
-      OBSERVER_UNLOCK();
-      setObserverHealthPhase(14);
-      return;
-    }
-  }
-
-  int slot = -1;
-  unsigned long oldest_seen = 0xFFFFFFFF;
-  uint16_t lowest_count = 0xFFFF;
-  for (uint8_t i = 0; i < OBSERVER_PATH_HISTORY_SIZE; i++) {
-    ObserverPathInfo& item = observer_paths[i];
-    if (item.seen_at == 0) {
-      slot = i;
-      break;
-    }
-    if (item.count < lowest_count || (item.count == lowest_count && item.seen_at < oldest_seen)) {
-      slot = i;
-      lowest_count = item.count;
-      oldest_seen = item.seen_at;
-    }
-  }
-
-  ObserverPathInfo& item = observer_paths[slot >= 0 ? slot : 0];
-  item.seen_at = now;
-  item.count = 1;
-  StrHelper::strncpy(item.text, text, sizeof(item.text));
-  StrHelper::strncpy(item.key, key, sizeof(item.key));
-  OBSERVER_UNLOCK();
-  setObserverHealthPhase(14);
-}
-
-static void formatSnrX4(char* dest, size_t dest_size, int8_t snr_x4) {
-  int value = snr_x4;
-  int abs_value = abs(value);
-  int whole = abs_value / 4;
-  int frac = (abs_value % 4) * 25;
-  snprintf(dest, dest_size, "%s%d.%02d", value < 0 ? "-" : "", whole, frac);
-}
-
-static void formatAge(char* dest, size_t dest_size, unsigned long age_secs) {
-  if (age_secs <= 180) {
-    snprintf(dest, dest_size, "%lus", age_secs);
-  } else {
-    unsigned long age_mins = age_secs / 60;
-    if (age_mins > 999) {
-      snprintf(dest, dest_size, ">999");
-    } else {
-      snprintf(dest, dest_size, "%lum", age_mins);
-    }
-  }
-}
-
-static bool observerPathContainsToken(const char* path_text, const char* token) {
-  if (!path_text || !token || token[0] == 0) return false;
-  size_t token_len = strlen(token);
-  const char* p = path_text;
-  while (*p) {
-    while (*p == ' ') p++;
-    const char* start = p;
-    while (*p && *p != ' ') p++;
-    if ((size_t)(p - start) == token_len && strncmp(start, token, token_len) == 0) {
-      return true;
-    }
-  }
-  return false;
-}
-
-static bool readLine(File& file, char* dest, size_t dest_size) {
-  if (!dest || dest_size == 0 || !file.available()) return false;
-  size_t pos = 0;
-  while (file.available()) {
-    int c = file.read();
-    if (c < 0) break;
-    if (c == '\r') continue;
-    if (c == '\n') break;
-    if (pos + 1 < dest_size) dest[pos++] = (char)c;
-  }
-  dest[pos] = 0;
-  return pos > 0 || file.available();
-}
-
-bool MyMesh::getObserverPathLine(uint8_t index, char* dest, size_t dest_size) const {
-  if (!dest || dest_size == 0) return false;
-  dest[0] = 0;
-
-  uint8_t found = 0;
-  unsigned long now = millis();
-  ObserverPathInfo paths[OBSERVER_PATH_HISTORY_SIZE];
-  OBSERVER_LOCK();
-  memcpy(paths, observer_paths, sizeof(paths));
-  OBSERVER_UNLOCK();
-  bool selected[OBSERVER_PATH_HISTORY_SIZE];
-  memset(selected, 0, sizeof(selected));
-
-  for (uint8_t i = 0; i < OBSERVER_PATH_HISTORY_SIZE; i++) {
-    int best = -1;
-    uint16_t best_count = 0;
-    unsigned long best_seen = 0;
-
-    for (uint8_t j = 0; j < OBSERVER_PATH_HISTORY_SIZE; j++) {
-      const ObserverPathInfo& item = paths[j];
-      if (item.seen_at == 0) continue;
-      if (selected[j]) continue;
-
-      if (item.count > best_count || (item.count == best_count && item.seen_at > best_seen)) {
-        best = j;
-        best_count = item.count;
-        best_seen = item.seen_at;
-      }
-    }
-
-    if (best < 0) {
-      return false;
-    }
-
-    selected[best] = true;
-    if (found == index) {
-      const ObserverPathInfo& item = paths[best];
-      char count_col[6];
-      char age_col[5];
-      unsigned long age_secs = (now - item.seen_at) / 1000;
-      if (item.count > 999) {
-        snprintf(count_col, sizeof(count_col), "999+");
-      } else {
-        snprintf(count_col, sizeof(count_col), "%u", (unsigned int)item.count);
-      }
-      formatAge(age_col, sizeof(age_col), age_secs);
-      snprintf(dest, dest_size, "%3s %s %s", count_col, item.text, age_col);
-      return true;
-    }
-    found++;
-  }
-  return false;
-}
-
-bool MyMesh::getObserverLatestPathLine(char* dest, size_t dest_size) const {
-  if (!dest || dest_size == 0) return false;
-  dest[0] = 0;
-
-  int best = -1;
-  unsigned long best_seen = 0;
-  ObserverPathInfo paths[OBSERVER_PATH_HISTORY_SIZE];
-  OBSERVER_LOCK();
-  memcpy(paths, observer_paths, sizeof(paths));
-  OBSERVER_UNLOCK();
-  for (uint8_t i = 0; i < OBSERVER_PATH_HISTORY_SIZE; i++) {
-    const ObserverPathInfo& item = paths[i];
-    if (item.seen_at == 0) continue;
-    if (item.seen_at > best_seen) {
-      best = i;
-      best_seen = item.seen_at;
-    }
-  }
-
-  if (best < 0) return false;
-
-  const ObserverPathInfo& item = paths[best];
-  char age_col[5];
-  unsigned long age_secs = (millis() - item.seen_at) / 1000;
-  formatAge(age_col, sizeof(age_col), age_secs);
-  snprintf(dest, dest_size, "%s %s", age_col, item.text);
-  return true;
-}
-
-void MyMesh::rememberObserverScope(mesh::Packet* packet) {
-  if (!packet) return;
-
-  uint16_t code = 0;
-  char name[OBSERVER_SCOPE_NAME_SIZE];
-  name[0] = 0;
-  bool known_scope = false;
-
-  if (packet->hasTransportCodes()) {
-    code = packet->transport_codes[0];
-    RegionEntry* region = region_map.findMatch(packet, 0);
-    if (region && region->name[0]) {
-      StrHelper::strncpy(name, region->name, sizeof(name));
-      known_scope = true;
-    } else {
-      snprintf(name, sizeof(name), "0x%04X", (unsigned int)code);
-    }
-  } else if (packet->getRouteType() == ROUTE_TYPE_FLOOD) {
-    StrHelper::strncpy(name, "*", sizeof(name));
-  } else {
-    StrHelper::strncpy(name, "none", sizeof(name));
-  }
-
-  unsigned long now = millis();
-  OBSERVER_LOCK();
-  for (uint8_t i = 0; i < OBSERVER_SCOPE_HISTORY_SIZE; i++) {
-    ObserverScopeInfo& item = observer_scopes[i];
-    if (item.seen_at == 0) continue;
-    bool same_scope = known_scope ? strcmp(item.name, name) == 0 :
-                                    (item.code == code && strcmp(item.name, name) == 0);
-    if (same_scope) {
-      item.seen_at = now;
-      item.code = code;
-      if (item.count < UINT32_MAX) item.count++;
-      OBSERVER_UNLOCK();
-      return;
-    }
-  }
-
-  int slot = -1;
-  unsigned long oldest_seen = 0xFFFFFFFF;
-  uint32_t lowest_count = UINT32_MAX;
-  for (uint8_t i = 0; i < OBSERVER_SCOPE_HISTORY_SIZE; i++) {
-    ObserverScopeInfo& item = observer_scopes[i];
-    if (item.seen_at == 0) {
-      slot = i;
-      break;
-    }
-    if (item.count < lowest_count || (item.count == lowest_count && item.seen_at < oldest_seen)) {
-      slot = i;
-      lowest_count = item.count;
-      oldest_seen = item.seen_at;
-    }
-  }
-
-  ObserverScopeInfo& item = observer_scopes[slot >= 0 ? slot : 0];
-  item.seen_at = now;
-  item.count = 1;
-  item.code = code;
-  StrHelper::strncpy(item.name, name, sizeof(item.name));
-  OBSERVER_UNLOCK();
-}
-
-bool MyMesh::getObserverScopeLine(uint8_t index, char* dest, size_t dest_size) const {
-  if (!dest || dest_size == 0) return false;
-  dest[0] = 0;
-
-  uint8_t found = 0;
-  ObserverScopeInfo scopes[OBSERVER_SCOPE_HISTORY_SIZE];
-  OBSERVER_LOCK();
-  memcpy(scopes, observer_scopes, sizeof(scopes));
-  OBSERVER_UNLOCK();
-
-  bool selected[OBSERVER_SCOPE_HISTORY_SIZE];
-  memset(selected, 0, sizeof(selected));
-  for (uint8_t i = 0; i < OBSERVER_SCOPE_HISTORY_SIZE; i++) {
-    int best = -1;
-    uint32_t best_count = 0;
-    unsigned long best_seen = 0;
-    for (uint8_t j = 0; j < OBSERVER_SCOPE_HISTORY_SIZE; j++) {
-      const ObserverScopeInfo& item = scopes[j];
-      if (item.seen_at == 0 || selected[j]) continue;
-      if (item.count > best_count || (item.count == best_count && item.seen_at > best_seen)) {
-        best = j;
-        best_count = item.count;
-        best_seen = item.seen_at;
-      }
-    }
-
-    if (best < 0) return false;
-    selected[best] = true;
-    if (found == index) {
-      const ObserverScopeInfo& item = scopes[best];
-      char count_col[8];
-      char age_col[5];
-      unsigned long age_secs = (millis() - item.seen_at) / 1000;
-      if (item.count > 999999) {
-        snprintf(count_col, sizeof(count_col), "999k+");
-      } else {
-        snprintf(count_col, sizeof(count_col), "%lu", (unsigned long)item.count);
-      }
-      formatAge(age_col, sizeof(age_col), age_secs);
-      snprintf(dest, dest_size, "%5s %-18s %s", count_col, item.name, age_col);
-      return true;
-    }
-    found++;
-  }
-  return false;
-}
-
-void MyMesh::rememberObserverLastHop(const mesh::Packet* packet, int8_t snr_x4) {
-  setObserverHealthPhase(15);
-  uint8_t hash_size = packet->getPathHashSize();
-  uint8_t hash_count = packet->getPathHashCount();
-  char text[OBSERVER_LAST_HOP_TEXT_SIZE];
-  char key[OBSERVER_LAST_HOP_TEXT_SIZE];
-  const char* hex = "0123456789ABCDEF";
-  size_t pos = 0;
-
-  if (hash_count == 0) {
-    StrHelper::strncpy(text, "-", sizeof(text));
-    StrHelper::strncpy(key, "0:-", sizeof(key));
-  } else {
-    const uint8_t* hash = &packet->path[(hash_count - 1) * hash_size];
-    for (uint8_t i = 0; i < hash_size && pos + 2 < sizeof(text); i++) {
-      text[pos++] = hex[hash[i] >> 4];
-      text[pos++] = hex[hash[i] & 0x0F];
-    }
-    text[pos] = 0;
-    snprintf(key, sizeof(key), "%u:%s", (unsigned int)hash_size, text);
-  }
-
-  unsigned long now = millis();
-  setObserverHealthPhase(16);
-  OBSERVER_LOCK();
-  for (uint8_t i = 0; i < OBSERVER_LAST_HOP_HISTORY_SIZE; i++) {
-    ObserverLastHopInfo& item = observer_last_hops[i];
-    if (item.seen_at == 0) continue;
-    if (strcmp(item.key, key) == 0) {
-      item.seen_at = now;
-      item.last_snr = snr_x4;
-      if (snr_x4 > item.max_snr) item.max_snr = snr_x4;
-      OBSERVER_UNLOCK();
-      setObserverHealthPhase(17);
-      return;
-    }
-  }
-
-  int slot = -1;
-  unsigned long oldest_seen = 0xFFFFFFFF;
-  for (uint8_t i = 0; i < OBSERVER_LAST_HOP_HISTORY_SIZE; i++) {
-    ObserverLastHopInfo& item = observer_last_hops[i];
-    if (item.seen_at == 0) {
-      slot = i;
-      break;
-    }
-    if (item.seen_at < oldest_seen) {
-      slot = i;
-      oldest_seen = item.seen_at;
-    }
-  }
-
-  ObserverLastHopInfo& item = observer_last_hops[slot >= 0 ? slot : 0];
-  item.seen_at = now;
-  item.last_snr = snr_x4;
-  item.max_snr = snr_x4;
-  StrHelper::strncpy(item.text, text, sizeof(item.text));
-  StrHelper::strncpy(item.key, key, sizeof(item.key));
-  OBSERVER_UNLOCK();
-  setObserverHealthPhase(17);
-}
-
-bool MyMesh::getObserverLastHopLine(uint8_t index, char* dest, size_t dest_size) const {
-  if (!dest || dest_size == 0) return false;
-  dest[0] = 0;
-
-  uint8_t found = 0;
-  unsigned long now = millis();
-  ObserverLastHopInfo last_hops[OBSERVER_LAST_HOP_HISTORY_SIZE];
-  ObserverPathInfo paths[OBSERVER_PATH_HISTORY_SIZE];
-  OBSERVER_LOCK();
-  memcpy(last_hops, observer_last_hops, sizeof(last_hops));
-  memcpy(paths, observer_paths, sizeof(paths));
-  OBSERVER_UNLOCK();
-  bool selected[OBSERVER_LAST_HOP_HISTORY_SIZE];
-  memset(selected, 0, sizeof(selected));
-
-  for (uint8_t i = 0; i < OBSERVER_LAST_HOP_HISTORY_SIZE; i++) {
-    int best = -1;
-    unsigned long best_seen = 0;
-
-    for (uint8_t j = 0; j < OBSERVER_LAST_HOP_HISTORY_SIZE; j++) {
-      const ObserverLastHopInfo& item = last_hops[j];
-      if (item.seen_at == 0) continue;
-      if (selected[j]) continue;
-
-      if (item.seen_at > best_seen) {
-        best = j;
-        best_seen = item.seen_at;
-      }
-    }
-
-    if (best < 0) return false;
-
-    selected[best] = true;
-    if (found == index) {
-      const ObserverLastHopInfo& item = last_hops[best];
-      char age_col[5];
-      char max_col[8];
-      char last_col[8];
-      uint8_t path_count = 0;
-      unsigned long age_secs = (now - item.seen_at) / 1000;
-      formatAge(age_col, sizeof(age_col), age_secs);
-      formatSnrX4(max_col, sizeof(max_col), item.max_snr);
-      formatSnrX4(last_col, sizeof(last_col), item.last_snr);
-      for (uint8_t k = 0; k < OBSERVER_PATH_HISTORY_SIZE; k++) {
-        const ObserverPathInfo& path = paths[k];
-        if (path.seen_at == 0) continue;
-        if (observerPathContainsToken(path.text, item.text)) path_count++;
-      }
-      snprintf(dest, dest_size, "%6s %4s %6s %6s %2u", item.text, age_col, max_col, last_col,
-               (unsigned int)path_count);
-      return true;
-    }
-    found++;
-  }
-  return false;
-}
-
-void MyMesh::getObserverDiagLine(char* dest, size_t dest_size) const {
-  if (!dest || dest_size == 0) return;
-
-#if defined(ESP32)
-  uint32_t boot_count = observerHealthValid(observer_health_breadcrumb) ? observer_health_breadcrumb.boot_count : 0;
-  uint16_t batt_mv = getObserverBattMilliVolts();
-  uint32_t last_irq = _radio ? _radio->getLastIrqMicros() : 0;
-  uint32_t irq_age_ms = last_irq ? (uint32_t)((micros() - last_irq) / 1000UL) : 0;
-  snprintf(dest, dest_size, "Boot:%s B:%lu Batt:%umV H:%luk/%luk IRQ:%lu/%lums",
-           observerResetReasonString(esp_reset_reason()),
-           (unsigned long)boot_count,
-           (unsigned int)batt_mv,
-           (unsigned long)(ESP.getFreeHeap() / 1024),
-           (unsigned long)(ESP.getMinFreeHeap() / 1024),
-           (unsigned long)(_radio ? _radio->getIrqCount() : 0),
-           (unsigned long)irq_age_ms);
-#else
-  snprintf(dest, dest_size, "Boot:n/a Up:%lus", (unsigned long)(millis() / 1000));
-#endif
-}
-
-void MyMesh::getObserverHealthLine(char* dest, size_t dest_size) const {
-  if (!dest || dest_size == 0) return;
-
-  if (!observer_prev_health_valid) {
-#if defined(ESP32)
-    snprintf(dest, dest_size, "Prev:none H:%luk/%luk",
-             (unsigned long)(ESP.getFreeHeap() / 1024),
-             (unsigned long)(ESP.getMinFreeHeap() / 1024));
-#else
-    snprintf(dest, dest_size, "Prev:none");
-#endif
-    return;
-  }
-
-  uint32_t up = observer_prev_health_uptime_s;
-  char up_col[8];
-  if (up < 180) {
-    snprintf(up_col, sizeof(up_col), "%lus", (unsigned long)up);
-  } else if (up < 3600) {
-    snprintf(up_col, sizeof(up_col), "%lum", (unsigned long)(up / 60));
-  } else {
-    snprintf(up_col, sizeof(up_col), "%luh", (unsigned long)(up / 3600));
-  }
-
-  const char* web_state = "off";
-  if (observer_prev_health_web_state & 0x02) {
-    web_state = (observer_prev_health_web_state & 0x04) ? "View+" : "View-";
-  } else if (observer_prev_health_web_state & 0x01) {
-    web_state = "AP";
-  }
-
-  char web_extra[24] = "";
-#if defined(ENABLE_OBSERVER_WEB_AP) && defined(ESP32)
-  if (observer_prev_health_web_active || observer_prev_health_web_rejects) {
-    snprintf(web_extra, sizeof(web_extra), " Q:%u/%u",
-             (unsigned int)observer_prev_health_web_active,
-             (unsigned int)observer_prev_health_web_rejects);
-  } else if (observer_prev_health_web_last && observer_prev_health_web_last_age_s < 600) {
-    snprintf(web_extra, sizeof(web_extra), " L:%u/%us",
-             (unsigned int)observer_prev_health_web_last,
-             (unsigned int)observer_prev_health_web_last_age_s);
-  }
-#endif
-
-  char render_extra[14] = "";
-  if (observer_prev_health_phase) {
-    snprintf(render_extra, sizeof(render_extra), ".%u", (unsigned int)observer_prev_health_phase);
-  }
-
-  char marker_extra[8] = "";
-  if (observer_prev_health_marker) {
-    snprintf(marker_extra, sizeof(marker_extra), " M:%u", (unsigned int)observer_prev_health_marker);
-  }
-
-  snprintf(dest, dest_size, "Prev:B%lu S%u%s%s %s W:%s%s V:%umV H:%luk/%luk RX:%lu T:%u/%u/%u/%u/%u/%u",
-           (unsigned long)observer_prev_health_boot_count,
-           (unsigned int)observer_prev_health_screen,
-           render_extra,
-           marker_extra,
-           up_col,
-           web_state,
-           web_extra,
-           (unsigned int)observer_prev_health_batt_mv,
-           (unsigned long)(observer_prev_health_free_heap / 1024),
-           (unsigned long)(observer_prev_health_min_heap / 1024),
-           (unsigned long)observer_prev_health_rx,
-           (unsigned int)observer_prev_health_max_recv_ms,
-           (unsigned int)observer_prev_health_max_decode_ms,
-           (unsigned int)observer_prev_health_max_forward_ms,
-           (unsigned int)observer_prev_health_max_display_ms,
-           (unsigned int)observer_prev_health_max_cli_ms,
-           (unsigned int)observer_prev_health_max_flood_ms);
-}
-
-void MyMesh::beginObserverHealthBoot() {
-#if defined(ESP32)
-  if (observer_boot_health_started) return;
-  observer_boot_health_started = true;
-
-  ObserverHealthBreadcrumb boot_item;
-  if (observerHealthValid(observer_health_breadcrumb)) {
-    boot_item = observer_health_breadcrumb;
-    boot_item.boot_count++;
-    boot_item.seq++;
-  } else {
-    memset(&boot_item, 0, sizeof(boot_item));
-    boot_item.magic = OBSERVER_HEALTH_MAGIC;
-    boot_item.seq = 1;
-    boot_item.boot_count = 1;
-    boot_item.web_last_age_s = 65535;
-  }
-  boot_item.reset_reason = (uint32_t)esp_reset_reason();
-  boot_item.uptime_s = millis() / 1000;
-  boot_item.rx_total = observer_rx_packets;
-  boot_item.mqtt_total = observer_mqtt_published;
-  boot_item.free_heap = ESP.getFreeHeap();
-  boot_item.min_heap = ESP.getMinFreeHeap();
-  boot_item.batt_mv = 0;
-  boot_item.screen = observer_health_screen;
-  boot_item.render_phase = observer_health_phase;
-  boot_item.marker = OBS_MARKER_NONE;
-  boot_item.last_irq_count = _radio ? _radio->getIrqCount() : 0;
-  boot_item.crc = observerHealthCrc(boot_item);
-  observer_health_breadcrumb = boot_item;
-#endif
-}
-
-void MyMesh::setObserverHealthScreen(uint8_t screen) {
-  observer_health_screen = screen;
-}
-
-void MyMesh::setObserverHealthPhase(uint8_t phase) {
-  observer_health_phase = phase;
-#if defined(ESP32)
-  ObserverHealthBreadcrumb item;
-  if (observerHealthValid(observer_health_breadcrumb)) {
-    item = observer_health_breadcrumb;
-  } else {
-    memset(&item, 0, sizeof(item));
-    item.magic = OBSERVER_HEALTH_MAGIC;
-    item.seq = 1;
-    item.web_last_age_s = 65535;
-  }
-  item.uptime_s = millis() / 1000;
-  item.rx_total = observer_rx_packets;
-  item.mqtt_total = observer_mqtt_published;
-  item.free_heap = ESP.getFreeHeap();
-  item.min_heap = ESP.getMinFreeHeap();
-  item.batt_mv = getObserverBattMilliVolts();
-  item.last_irq_count = _radio ? _radio->getIrqCount() : 0;
-  item.screen = observer_health_screen;
-  item.render_phase = observer_health_phase;
-  item.marker = observer_health_marker;
-  item.max_recv_raw_ms = observerClampDuration(_radio ? _radio->getMaxRecvRawMillis() : 0);
-  item.max_decode_ms = observerClampDuration(observer_max_decode_ms);
-  item.max_forward_ms = observerClampDuration(observer_max_forward_ms);
-  item.max_display_ms = observerClampDuration(observer_max_display_ms);
-  item.max_cli_ms = observerClampDuration(observer_max_cli_ms);
-  item.max_flood_ms = observerClampDuration(observer_max_flood_ms);
-  item.crc = observerHealthCrc(item);
-  observer_health_breadcrumb = item;
-#endif
-}
-
-void MyMesh::setObserverHealthMarker(uint8_t marker) {
-  observer_health_marker = marker;
-  setObserverHealthPhase(observer_health_phase);
-}
-
-void MyMesh::noteObserverTiming(uint8_t marker, uint32_t duration_ms) {
-  setObserverHealthMarker(marker);
-  switch (marker) {
-    case OBS_MARKER_DISPLAY:
-      if (duration_ms > observer_max_display_ms) observer_max_display_ms = duration_ms;
-      break;
-    case OBS_MARKER_CLI:
-      if (duration_ms > observer_max_cli_ms) observer_max_cli_ms = duration_ms;
-      break;
-    case OBS_MARKER_FLOOD_ADVERT:
-      if (duration_ms > observer_max_flood_ms) observer_max_flood_ms = duration_ms;
-      break;
-    default:
-      break;
-  }
-#if defined(ESP32)
-  if (duration_ms > 10) {
-    vTaskDelay(1);
-  }
-#else
-  if (duration_ms > 10) {
-    yield();
-  }
-#endif
-  setObserverHealthMarker(OBS_MARKER_NONE);
-}
-
-void MyMesh::noteDispatchTiming(uint8_t marker, uint32_t duration_ms) {
-  if (marker == OBS_MARKER_RADIO_RECV) {
-    return;
-  }
-  setObserverHealthMarker(marker);
-  if (duration_ms == UINT32_MAX) {
-    return;
-  }
-  if (marker == OBS_MARKER_PACKET_DECODE && duration_ms > observer_max_decode_ms) {
-    observer_max_decode_ms = duration_ms;
-  } else if (marker == OBS_MARKER_PACKET_FORWARD && duration_ms > observer_max_forward_ms) {
-    observer_max_forward_ms = duration_ms;
-  }
-#if defined(ESP32)
-  if (duration_ms > 10) {
-    vTaskDelay(1);
-  }
-#else
-  if (duration_ms > 10) {
-    yield();
-  }
-#endif
-  setObserverHealthMarker(OBS_MARKER_NONE);
-}
-
-void MyMesh::updateObserverHealth() {
-#if defined(ESP32)
-  unsigned long now = millis();
-  if ((long)(now - observer_next_health_at) < 0) return;
-  observer_next_health_at = now + OBSERVER_HEALTH_UPDATE_MS;
-
-  ObserverHealthBreadcrumb item;
-  item.magic = OBSERVER_HEALTH_MAGIC;
-  item.seq = observerHealthValid(observer_health_breadcrumb) ? observer_health_breadcrumb.seq + 1 : 1;
-  item.uptime_s = now / 1000;
-  item.rx_total = observer_rx_packets;
-  item.mqtt_total = observer_mqtt_published;
-  item.free_heap = ESP.getFreeHeap();
-  item.min_heap = ESP.getMinFreeHeap();
-  item.batt_mv = getObserverBattMilliVolts();
-  item.boot_count = observerHealthValid(observer_health_breadcrumb) ? observer_health_breadcrumb.boot_count : 1;
-  item.reset_reason = (uint32_t)esp_reset_reason();
-  item.last_irq_count = _radio ? _radio->getIrqCount() : 0;
-  item.screen = observer_health_screen;
-  item.render_phase = observer_health_phase;
-  item.marker = observer_health_marker;
-  item.max_recv_raw_ms = observerClampDuration(_radio ? _radio->getMaxRecvRawMillis() : 0);
-  item.max_decode_ms = observerClampDuration(observer_max_decode_ms);
-  item.max_forward_ms = observerClampDuration(observer_max_forward_ms);
-  item.max_display_ms = observerClampDuration(observer_max_display_ms);
-  item.max_cli_ms = observerClampDuration(observer_max_cli_ms);
-  item.max_flood_ms = observerClampDuration(observer_max_flood_ms);
-  item.web_state = 0;
-#if defined(ENABLE_OBSERVER_WEB_AP) && defined(ESP32)
-  if (observer_web_ap_running) item.web_state |= 0x01;
-  if (observer_web_sta_running) item.web_state |= 0x02;
-  if (WiFi.status() == WL_CONNECTED) item.web_state |= 0x04;
-  if (WiFi.getMode() & WIFI_MODE_AP) item.web_state |= 0x08;
-  if (WiFi.getMode() & WIFI_MODE_STA) item.web_state |= 0x10;
-  OBSERVER_LOCK();
-  item.web_active = observer_web_active_handler;
-  item.web_rejects = observer_web_rejects;
-  item.web_last = observer_web_last_handler;
-  item.web_last_age_s = observer_web_last_at
-      ? (uint16_t)min(65535UL, (now - observer_web_last_at) / 1000UL)
-      : 65535;
-  OBSERVER_UNLOCK();
-#else
-  item.web_active = 0;
-  item.web_rejects = 0;
-  item.web_last = 0;
-  item.web_last_age_s = 65535;
-#endif
-  item.crc = observerHealthCrc(item);
-  observer_health_breadcrumb = item;
-#endif
-}
-
-#ifdef ENABLE_OBSERVER_SAVEPOINTS
-static void formatSavepointFilename(char* dest, size_t dest_size, uint16_t id) {
-  snprintf(dest, dest_size, "/sp%04u.csv", (unsigned int)id);
-}
-
-bool MyMesh::getObserverSavepointLine(uint8_t index, char* dest, size_t dest_size) const {
-  if (!dest || dest_size == 0 || !_fs) return false;
-  dest[0] = 0;
-
-  File file = _fs->open(SAVEPOINT_INDEX_FILE);
-  if (!file) return false;
-
-  char line[OBSERVER_SAVEPOINT_LINE_SIZE];
-  uint8_t found = 0;
-  while (readLine(file, line, sizeof(line))) {
-    if (line[0] == 0) continue;
-    if (found == index) {
-      unsigned int id = 0;
-      unsigned long ts = 0;
-      unsigned long rx = 0;
-      int nf = 0;
-      if (sscanf(line, "%u,%lu,%lu,%d", &id, &ts, &rx, &nf) == 4) {
-        DateTime dt((uint32_t)ts);
-        snprintf(dest, dest_size, "%04u %02d:%02d RX:%lu NF:%d",
-                 id, dt.hour(), dt.minute(), rx, nf);
-      } else {
-        StrHelper::strncpy(dest, line, dest_size);
-      }
-      file.close();
-      return true;
-    }
-    found++;
-  }
-
-  file.close();
-  return false;
-}
-#endif
-
-void MyMesh::getObserverClockSyncStatus(char* dest, size_t dest_size) const {
-  if (!dest || dest_size == 0) return;
-  uint32_t current = getRTCClock()->getCurrentTime();
-  DateTime now_dt(current);
-
-#ifdef ENABLE_OBSERVER_CLOCK_SYNC
-  if (observer_clock_synced) {
-    DateTime dt(observer_clock_synced_at);
-    snprintf(dest, dest_size, "CLK %02d:%02d UTC mesh %02d:%02d",
-             now_dt.hour(), now_dt.minute(), dt.hour(), dt.minute());
-    return;
-  }
-
-  if (current >= CLOCK_SYNC_MIN_TIME) {
-    snprintf(dest, dest_size, "CLK %02d:%02d UTC set", now_dt.hour(), now_dt.minute());
-    return;
-  }
-
-  uint8_t distinct = 0;
-  for (uint8_t i = 0; i < OBSERVER_CLOCK_SYNC_SAMPLES; i++) {
-    if (!observer_clock_sync_samples[i].used) continue;
-    bool seen = false;
-    for (uint8_t j = 0; j < i; j++) {
-      if (!observer_clock_sync_samples[j].used) continue;
-      if (memcmp(observer_clock_sync_samples[i].pub_key, observer_clock_sync_samples[j].pub_key, PUB_KEY_SIZE) == 0) {
-        seen = true;
-        break;
-      }
-    }
-    if (!seen) distinct++;
-  }
-
-  snprintf(dest, dest_size, "CLK %02d:%02d UTC wait %u/%u n%u/%u",
-           now_dt.hour(),
-           now_dt.minute(),
-           (unsigned int)observer_clock_sync_count,
-           (unsigned int)OBSERVER_CLOCK_SYNC_REQUIRED,
-           (unsigned int)distinct,
-           (unsigned int)OBSERVER_CLOCK_SYNC_DISTINCT);
-#else
-  snprintf(dest, dest_size, "CLK %02d:%02d UTC no sync", now_dt.hour(), now_dt.minute());
-#endif
-}
-
-#ifdef ENABLE_OBSERVER_SAVEPOINTS
-bool MyMesh::createObserverSavepoint(const uint16_t* activity_bins, const uint16_t* airtime_bins, uint8_t bin_count,
-                                     uint8_t newest_bin, char* status, size_t status_size) {
-  if (status && status_size) status[0] = 0;
-  if (!_fs) return false;
-
-  uint16_t next_id = 1;
-  uint8_t count = 0;
-  File index = _fs->open(SAVEPOINT_INDEX_FILE);
-  if (index) {
-    char line[OBSERVER_SAVEPOINT_LINE_SIZE];
-    while (readLine(index, line, sizeof(line))) {
-      unsigned int id = 0;
-      if (sscanf(line, "%u,", &id) == 1) {
-        if (id >= next_id) next_id = id + 1;
-        count++;
-      }
-    }
-    index.close();
-  }
-
-  if (count >= OBSERVER_SAVEPOINT_MAX) {
-    index = _fs->open(SAVEPOINT_INDEX_FILE);
-    if (index) {
-      char line[OBSERVER_SAVEPOINT_LINE_SIZE];
-      if (readLine(index, line, sizeof(line))) {
-        unsigned int old_id = 0;
-        if (sscanf(line, "%u,", &old_id) == 1) {
-          char old_name[16];
-          formatSavepointFilename(old_name, sizeof(old_name), (uint16_t)old_id);
-          _fs->remove(old_name);
-        }
-      }
-      File tmp = _fs->open("/sp_index.tmp", "w");
-      while (tmp && readLine(index, line, sizeof(line))) {
-        tmp.println(line);
-      }
-      index.close();
-      if (tmp) tmp.close();
-      _fs->remove(SAVEPOINT_INDEX_FILE);
-      _fs->rename("/sp_index.tmp", SAVEPOINT_INDEX_FILE);
-    }
-  }
-
-  char filename[16];
-  formatSavepointFilename(filename, sizeof(filename), next_id);
-  File file = _fs->open(filename, "w");
-  if (!file) {
-    if (status && status_size) snprintf(status, status_size, "SP save failed");
-    return false;
-  }
-
-  uint32_t now = getRTCClock()->getCurrentTime();
-  DateTime dt(now);
-  uint32_t rx_total = observer_rx_packets;
-  uint32_t mqtt_total = observer_mqtt_published;
-  int noise_floor = getObserverNoiseFloor();
-  int snr_x4 = (int)(getObserverLastSnr() * 4.0f);
-
-  file.println("section,key,value");
-  file.printf("meta,id,%u\n", (unsigned int)next_id);
-  file.printf("meta,timestamp,%lu\n", (unsigned long)now);
-  file.printf("meta,datetime_utc,%04d-%02d-%02dT%02d:%02d:%02dZ\n",
-              dt.year(), dt.month(), dt.day(), dt.hour(), dt.minute(), dt.second());
-  char clock_sync[32];
-  getObserverClockSyncStatus(clock_sync, sizeof(clock_sync));
-  file.printf("meta,clock_sync,%s\n", clock_sync);
-  file.printf("node,name,%s\n", _prefs.node_name);
-  file.printf("node,lat,%.6f\n", _prefs.node_lat);
-  file.printf("node,lon,%.6f\n", _prefs.node_lon);
-  file.printf("radio,freq,%.3f\n", _prefs.freq);
-  file.printf("radio,sf,%u\n", (unsigned int)_prefs.sf);
-  file.printf("radio,bw,%.2f\n", _prefs.bw);
-  file.printf("radio,cr,%u\n", (unsigned int)_prefs.cr);
-  file.printf("radio,noise_floor,%d\n", noise_floor);
-  file.printf("radio,last_snr_x4,%d\n", snr_x4);
-  file.printf("power,battery_mv,%u\n", (unsigned int)getObserverBattMilliVolts());
-#ifdef ESP32
-  file.printf("system,free_heap,%lu\n", (unsigned long)ESP.getFreeHeap());
-#endif
-  file.printf("counter,rx_total,%lu\n", (unsigned long)rx_total);
-  file.printf("counter,mqtt_total,%lu\n", (unsigned long)mqtt_total);
-  file.printf("mqtt,enabled,%u\n", (unsigned int)_prefs.mqtt_enabled);
-  file.printf("mqtt,status,%s\n", getObserverMqttStatus());
-  file.printf("mqtt,host,%s\n", _prefs.mqtt_host);
-  file.printf("mqtt,publish_failures,%lu\n", (unsigned long)getObserverMqttPublishFailures());
-
-  if (activity_bins && bin_count > 0) {
-    for (uint8_t i = 0; i < bin_count; i++) {
-      uint8_t idx = (newest_bin + bin_count - i) % bin_count;
-      file.printf("hist,%u,%u\n", (unsigned int)i, (unsigned int)activity_bins[idx]);
-    }
-  }
-  if (airtime_bins && bin_count > 0) {
-    for (uint8_t i = 0; i < bin_count; i++) {
-      uint8_t idx = (newest_bin + bin_count - i) % bin_count;
-      file.printf("airtime_ms,%u,%u\n", (unsigned int)i, (unsigned int)airtime_bins[idx]);
-    }
-  }
-
-  char line[96];
-  for (uint8_t i = 0; i < OBSERVER_PATH_HISTORY_SIZE; i++) {
-    if (getObserverPathLine(i, line, sizeof(line))) {
-      file.printf("path,%u,%s\n", (unsigned int)i, line);
-    }
-  }
-  for (uint8_t i = 0; i < OBSERVER_LAST_HOP_HISTORY_SIZE; i++) {
-    if (getObserverLastHopLine(i, line, sizeof(line))) {
-      file.printf("heard,%u,%s\n", (unsigned int)i, line);
-    }
-  }
-  file.close();
-
-  index = _fs->open(SAVEPOINT_INDEX_FILE, "a");
-  if (!index) {
-    if (status && status_size) snprintf(status, status_size, "SP index failed");
-    return false;
-  }
-  index.printf("%u,%lu,%lu,%d\n", (unsigned int)next_id, (unsigned long)now, (unsigned long)rx_total, noise_floor);
-  index.close();
-
-  if (status && status_size) snprintf(status, status_size, "SP %u saved", (unsigned int)next_id);
-  return true;
-}
-#endif
-
-#if defined(ENABLE_OBSERVER_WEB_AP) && defined(ESP32)
-String MyMesh::buildObserverSavepointListCsv() const {
-  String body = "id,datetime_utc,rx_total,noise_floor\n";
-  if (!_fs) return body;
-
-  File f = _fs->open(SAVEPOINT_INDEX_FILE);
-  if (!f) return body;
-
-  char line[OBSERVER_SAVEPOINT_LINE_SIZE];
-  while (readLine(f, line, sizeof(line))) {
-    unsigned int id = 0;
-    unsigned long ts = 0;
-    unsigned long rx = 0;
-    int nf = 0;
-    if (sscanf(line, "%u,%lu,%lu,%d", &id, &ts, &rx, &nf) != 4) continue;
-    DateTime dt((uint32_t)ts);
-    char row[72];
-    snprintf(row, sizeof(row), "%u,%04d-%02d-%02dT%02d:%02d:%02dZ,%lu,%d\n",
-             id, dt.year(), dt.month(), dt.day(), dt.hour(), dt.minute(), dt.second(), rx, nf);
-    body += row;
-  }
-  f.close();
-  return body;
-}
-
-void MyMesh::updateObserverWebMetrics() {
-  unsigned long now = millis();
-  OBSERVER_LOCK();
-  while ((long)(now - observer_web_next_rollover) >= 0) {
-    observer_web_bin_index = (observer_web_bin_index + 1) % 12;
-    observer_web_rx_bins[observer_web_bin_index] = 0;
-    observer_web_air_bins[observer_web_bin_index] = 0;
-    observer_web_next_rollover += 60000UL;
-  }
-
-  if (observer_rx_packets != observer_web_prev_rx_total) {
-    uint32_t delta = observer_rx_packets - observer_web_prev_rx_total;
-    uint32_t value = (uint32_t)observer_web_rx_bins[observer_web_bin_index] + delta;
-    observer_web_rx_bins[observer_web_bin_index] = value > UINT16_MAX ? UINT16_MAX : (uint16_t)value;
-    observer_web_prev_rx_total = observer_rx_packets;
-  }
-
-  uint32_t air_ms = getReceiveAirTime();
-  if (air_ms != observer_web_prev_air_ms) {
-    uint32_t delta = air_ms - observer_web_prev_air_ms;
-    uint32_t value = (uint32_t)observer_web_air_bins[observer_web_bin_index] + delta;
-    observer_web_air_bins[observer_web_bin_index] = value > UINT16_MAX ? UINT16_MAX : (uint16_t)value;
-    observer_web_prev_air_ms = air_ms;
-  }
-  OBSERVER_UNLOCK();
-}
-
-static void appendJsonString(String& body, const char* text);
-
-String MyMesh::buildObserverWebStatusJson() const {
-  String body = "{\"node\":";
-  body.reserve(768);
-  appendJsonString(body, _prefs.node_name);
-  body += ",\"time\":";
-  body += String((unsigned long)getRTCClock()->getCurrentTime());
-  body += ",\"lat\":";
-  body += String(_prefs.node_lat, 6);
-  body += ",\"lon\":";
-  body += String(_prefs.node_lon, 6);
-  body += ",\"view_mode\":";
-  body += observer_web_sta_running ? "true" : "false";
-  body += ",\"snr\":";
-  body += String(getObserverLastSnr(), 1);
-  body += ",\"nf\":";
-  body += String(getObserverNoiseFloor());
-  body += ",\"free_heap\":";
-  body += String((unsigned long)ESP.getFreeHeap());
-  body += ",\"batt_mv\":";
-  body += String((unsigned int)getObserverBattMilliVolts());
-  body += ",\"savepoints\":[";
-
-  bool first = true;
-  File f = _fs ? _fs->open(SAVEPOINT_INDEX_FILE) : File();
-  if (f) {
-    char line[OBSERVER_SAVEPOINT_LINE_SIZE];
-    while (readLine(f, line, sizeof(line))) {
-      unsigned int id = 0;
-      unsigned long ts = 0;
-      unsigned long rx = 0;
-      int nf = 0;
-      if (sscanf(line, "%u,%lu,%lu,%d", &id, &ts, &rx, &nf) != 4) continue;
-      DateTime dt((uint32_t)ts);
-      char row[128];
-      snprintf(row, sizeof(row), "%s{\"id\":%u,\"time\":\"%04d-%02d-%02d %02d:%02d\",\"rx\":%lu,\"nf\":%d}",
-               first ? "" : ",", id, dt.year(), dt.month(), dt.day(), dt.hour(), dt.minute(), rx, nf);
-      body += row;
-      first = false;
-    }
-    f.close();
-  }
-
-  body += "]}";
-  return body;
-}
-
-static void appendJsonString(String& body, const char* text) {
-  body += "\"";
-  if (text) {
-    while (*text) {
-      unsigned char c = (unsigned char)*text++;
-      if (c == '"' || c == '\\') {
-        body += "\\";
-        body += (char)c;
-      } else if (c == '\n') {
-        body += "\\n";
-      } else if (c == '\r') {
-        body += "\\r";
-      } else if (c == '\t') {
-        body += "\\t";
-      } else if (c < 0x20) {
-        char esc[7];
-        snprintf(esc, sizeof(esc), "\\u%04x", (unsigned int)c);
-        body += esc;
-      } else {
-        body += (char)c;
-      }
-    }
-  }
-  body += "\"";
-}
-
-String MyMesh::buildObserverWebMonitorJson() const {
-  uint16_t rx_bins[12];
-  uint16_t air_bins[12];
-  uint8_t bin_index;
-  OBSERVER_LOCK();
-  memcpy(rx_bins, observer_web_rx_bins, sizeof(rx_bins));
-  memcpy(air_bins, observer_web_air_bins, sizeof(air_bins));
-  bin_index = observer_web_bin_index;
-  OBSERVER_UNLOCK();
-
-  String body = "{\"rx\":[";
-  body.reserve(1536);
-  for (uint8_t i = 0; i < 12; i++) {
-    uint8_t idx = (bin_index + i + 1) % 12;
-    if (i) body += ",";
-    body += String((unsigned int)rx_bins[idx]);
-  }
-  body += "],\"airtime_ms\":[";
-  for (uint8_t i = 0; i < 12; i++) {
-    uint8_t idx = (bin_index + i + 1) % 12;
-    if (i) body += ",";
-    body += String((unsigned int)air_bins[idx]);
-  }
-  body += "],\"paths\":[";
-  char line[96];
-  uint8_t path_count = 0;
-  for (uint8_t i = 0; i < 8; i++) {
-    if (!getObserverPathLine(i, line, sizeof(line))) continue;
-    if (path_count++) body += ",";
-    appendJsonString(body, line);
-  }
-  body += "],\"heards\":[";
-  uint8_t heard_count = 0;
-  for (uint8_t i = 0; i < 10; i++) {
-    if (!getObserverLastHopLine(i, line, sizeof(line))) continue;
-    if (heard_count++) body += ",";
-    appendJsonString(body, line);
-  }
-  body += "],\"heat\":{\"paths\":[";
-
-  char path_text[8][32];
-  memset(path_text, 0, sizeof(path_text));
-  path_count = 0;
-  for (uint8_t i = 0; i < 8; i++) {
-    if (!getObserverPathLine(i, line, sizeof(line))) continue;
-    char work[96];
-    snprintf(work, sizeof(work), "%s", line);
-    char* cursor = work;
-    char* count = strtok(cursor, " ");
-    (void)count;
-    char path[32] = "";
-    char* token = nullptr;
-    while ((token = strtok(nullptr, " ")) != nullptr) {
-      size_t len = strlen(token);
-      if (strcmp(token, ">999") == 0 || (len > 1 && (token[len - 1] == 's' || token[len - 1] == 'm'))) break;
-      if (strcmp(token, "-") != 0) {
-        if (path[0]) strncat(path, " ", sizeof(path) - strlen(path) - 1);
-        strncat(path, token, sizeof(path) - strlen(path) - 1);
-      }
-    }
-    if (!path[0]) continue;
-    snprintf(path_text[path_count], sizeof(path_text[path_count]), "%s", path);
-    if (path_count) body += ",";
-    appendJsonString(body, path_text[path_count]);
-    path_count++;
-  }
-
-  struct WebHeatRow {
-    char rep[8];
-    uint8_t pos[8];
-    uint8_t pc;
-  };
-  WebHeatRow rows[10];
-  uint8_t row_count = 0;
-  memset(rows, 0, sizeof(rows));
-  for (uint8_t p = 0; p < path_count; p++) {
-    char work[32];
-    snprintf(work, sizeof(work), "%s", path_text[p]);
-    char* token = strtok(work, " ");
-    uint8_t pos = 1;
-    while (token) {
-      int row = -1;
-      for (uint8_t r = 0; r < row_count; r++) {
-        if (strcmp(rows[r].rep, token) == 0) {
-          row = r;
-          break;
-        }
-      }
-      if (row < 0 && row_count < 10) {
-        row = row_count++;
-        snprintf(rows[row].rep, sizeof(rows[row].rep), "%s", token);
-      }
-      if (row >= 0) {
-        rows[row].pos[p] = pos;
-      }
-      if (pos < 3) pos++;
-      token = strtok(nullptr, " ");
-    }
-  }
-  for (uint8_t r = 0; r < row_count; r++) {
-    uint8_t pc = 0;
-    for (uint8_t p = 0; p < path_count; p++) {
-      if (rows[r].pos[p]) pc++;
-    }
-    rows[r].pc = pc;
-  }
-  for (uint8_t i = 0; i < row_count; i++) {
-    for (uint8_t j = i + 1; j < row_count; j++) {
-      if (rows[j].pc > rows[i].pc) {
-        WebHeatRow tmp = rows[i];
-        rows[i] = rows[j];
-        rows[j] = tmp;
-      }
-    }
-  }
-
-  body += "],\"rows\":[";
-  for (uint8_t r = 0; r < row_count; r++) {
-    if (r) body += ",";
-    body += "{\"rep\":";
-    appendJsonString(body, rows[r].rep);
-    body += ",\"pc\":";
-    body += String((unsigned int)rows[r].pc);
-    body += ",\"pos\":[";
-    for (uint8_t p = 0; p < path_count; p++) {
-      if (p) body += ",";
-      body += String((unsigned int)rows[r].pos[p]);
-    }
-    body += "]}";
-  }
-  body += "]}}";
-  return body;
-}
-
-bool MyMesh::beginObserverWebRequest(uint8_t handler, AsyncWebServerRequest* request) {
-  bool busy = false;
-  OBSERVER_LOCK();
-  if (observer_web_request_busy) {
-    busy = true;
-    if (observer_web_rejects < 255) observer_web_rejects++;
-  } else {
-    observer_web_request_busy = true;
-    observer_web_active_handler = handler;
-    observer_web_last_handler = handler;
-    observer_web_last_at = millis();
-  }
-  OBSERVER_UNLOCK();
-
-  observer_next_health_at = 0;
-  updateObserverHealth();
-
-  if (busy) {
-    if (request) request->send(429, "text/plain", "busy");
-    return false;
-  }
-  return true;
-}
-
-void MyMesh::endObserverWebRequest() {
-  OBSERVER_LOCK();
-  observer_web_request_busy = false;
-  observer_web_active_handler = 0;
-  OBSERVER_UNLOCK();
-  observer_next_health_at = 0;
-  updateObserverHealth();
-}
-
-void MyMesh::setupObserverWebRoutes() {
-  if (!observer_web_server) return;
-
-  observer_web_server->on("/", HTTP_GET, [](AsyncWebServerRequest* request) {
-    request->send_P(200, "text/html", OBSERVER_WEB_HTML);
-  });
-
-  observer_web_server->on("/api/status", HTTP_GET, [this](AsyncWebServerRequest* request) {
-    if (!beginObserverWebRequest(2, request)) return;
-    String body = buildObserverWebStatusJson();
-    request->send(200, "application/json", body);
-    endObserverWebRequest();
-  });
-
-  observer_web_server->on("/api/monitor", HTTP_GET, [this](AsyncWebServerRequest* request) {
-    if (!beginObserverWebRequest(3, request)) return;
-    static String body;
-    static unsigned long body_at = 0;
-    unsigned long now = millis();
-    if (!body.length() || (long)(now - body_at) >= 55000L) {
-      body = buildObserverWebMonitorJson();
-      body_at = now;
-    }
-    endObserverWebRequest();
-    request->send(200, "application/json", body);
-  });
-
-  observer_web_server->on("/api/time", HTTP_POST, [this](AsyncWebServerRequest* request) {
-    if (observer_web_sta_running) {
-      request->send(403, "text/plain", "view mode");
-      return;
-    }
-    if (!request->hasParam("epoch")) {
-      request->send(400, "text/plain", "missing epoch");
-      return;
-    }
-    uint32_t epoch = (uint32_t)strtoul(request->getParam("epoch")->value().c_str(), nullptr, 10);
-    if (epoch < CLOCK_SYNC_MIN_TIME || epoch > CLOCK_SYNC_MAX_TIME) {
-      request->send(400, "text/plain", "invalid epoch");
-      return;
-    }
-    getRTCClock()->setCurrentTime(epoch);
-    request->send(200, "text/plain", "time set");
-  });
-
-  observer_web_server->on("/api/position", HTTP_POST, [this](AsyncWebServerRequest* request) {
-    if (observer_web_sta_running) {
-      request->send(403, "text/plain", "view mode");
-      return;
-    }
-    handleObserverWebPosition(this, request);
-  });
-
-#ifdef ENABLE_OBSERVER_SAVEPOINTS
-  observer_web_server->on("/api/savepoint", HTTP_POST, [this](AsyncWebServerRequest* request) {
-    if (!beginObserverWebRequest(4, request)) return;
-    char status[32];
-    updateObserverWebMetrics();
-    uint16_t rx_bins[12];
-    uint16_t air_bins[12];
-    uint8_t bin_index;
-    OBSERVER_LOCK();
-    memcpy(rx_bins, observer_web_rx_bins, sizeof(rx_bins));
-    memcpy(air_bins, observer_web_air_bins, sizeof(air_bins));
-    bin_index = observer_web_bin_index;
-    OBSERVER_UNLOCK();
-    bool ok = createObserverSavepoint(rx_bins, air_bins, 12, bin_index, status, sizeof(status));
-    request->send(ok ? 200 : 500, "text/plain", status[0] ? status : (ok ? "SP saved" : "SP save failed"));
-    endObserverWebRequest();
-  });
-#endif
-
-  observer_web_server->on("/sp.list.csv", HTTP_GET, [this](AsyncWebServerRequest* request) {
-    if (!beginObserverWebRequest(5, request)) return;
-    String body = buildObserverSavepointListCsv();
-    request->send(200, "text/csv", body);
-    endObserverWebRequest();
-  });
-
-  observer_web_server->on("/sp.csv", HTTP_GET, [this](AsyncWebServerRequest* request) {
-    if (!beginObserverWebRequest(6, request)) return;
-    if (!request->hasParam("id")) {
-      endObserverWebRequest();
-      request->send(400, "text/plain", "missing id");
-      return;
-    }
-    uint16_t id = (uint16_t)atoi(request->getParam("id")->value().c_str());
-    char filename[16];
-    formatSavepointFilename(filename, sizeof(filename), id);
-    if (!_fs || !_fs->exists(filename)) {
-      endObserverWebRequest();
-      request->send(404, "text/plain", "savepoint not found");
-      return;
-    }
-    char download_name[20];
-    snprintf(download_name, sizeof(download_name), "sp%04u.csv", (unsigned int)id);
-    AsyncWebServerResponse* response = request->beginResponse(*_fs, filename, "text/csv", true);
-    response->addHeader("Content-Disposition", String("attachment; filename=\"") + download_name + "\"");
-    request->send(response);
-    endObserverWebRequest();
-  });
-}
-
-bool MyMesh::startObserverWebAp(char* status, size_t status_size) {
-  if (observer_web_ap_running) {
-    if (status && status_size) snprintf(status, status_size, "AP http://%s", WiFi.softAPIP().toString().c_str());
-    return true;
-  }
-  if (observer_web_sta_running) {
-    stopObserverWebStaView();
-  }
-
-#ifdef WITH_MQTT_OBSERVER
-  mqtt_observer.end();
-#endif
-  if (observer_web_server) {
-    observer_web_server->end();
-  }
-  WiFi.disconnect(true);
-  WiFi.softAPdisconnect(true);
-  WiFi.mode(WIFI_OFF);
-  delay(100);
-  WiFi.mode(WIFI_AP);
-  bool ok = WiFi.softAP(OBSERVER_WEB_AP_SSID, OBSERVER_WEB_AP_PASSWORD);
-  if (!ok) {
-    if (status && status_size) snprintf(status, status_size, "AP start failed");
-    return false;
-  }
-
-  if (!observer_web_server) {
-    observer_web_server = new AsyncWebServer(80);
-    setupObserverWebRoutes();
-  }
-  delay(50);
-  observer_web_server->begin();
-  observer_web_ap_running = true;
-  observer_web_sta_running = false;
-  observer_web_sta_next_attempt = 0;
-  observer_web_sta_started_at = 0;
-  if (status && status_size) snprintf(status, status_size, "AP http://%s", WiFi.softAPIP().toString().c_str());
-  return true;
-}
-
-void MyMesh::stopObserverWebAp() {
-  if (!observer_web_ap_running) return;
-  if (observer_web_server) {
-    observer_web_server->end();
-  }
-  WiFi.softAPdisconnect(true);
-  WiFi.disconnect(true);
-  WiFi.mode(WIFI_OFF);
-  observer_web_ap_running = false;
-#ifdef WITH_MQTT_OBSERVER
-  if (_prefs.mqtt_enabled) mqtt_observer.begin();
-#endif
-}
-
-bool MyMesh::startObserverWebStaView(char* status, size_t status_size) {
-  if (observer_web_sta_running) {
-    IPAddress ip = WiFi.localIP();
-    if (status && status_size) snprintf(status, status_size, "View http://%s", ip.toString().c_str());
-    return true;
-  }
-
-#ifdef WITH_MQTT_OBSERVER
-  if (_prefs.mqtt_enabled || mqtt_observer.isRunning()) {
-    _prefs.mqtt_enabled = 0;
-    _cli.savePrefs(_fs);
-    mqtt_observer.end();
-  }
-#endif
-  if (observer_web_ap_running) {
-    stopObserverWebAp();
-  }
-
-  if (!_prefs.wifi_ssid[0]) {
-    if (status && status_size) snprintf(status, status_size, "View no WiFi");
-    return false;
-  }
-
-  if (observer_web_server) {
-    observer_web_server->end();
-  }
-  WiFi.softAPdisconnect(true);
-  WiFi.disconnect(true);
-  WiFi.mode(WIFI_OFF);
-  delay(100);
-  WiFi.mode(WIFI_STA);
-  WiFi.begin(_prefs.wifi_ssid, _prefs.wifi_password);
-  if (!observer_web_server) {
-    observer_web_server = new AsyncWebServer(80);
-    setupObserverWebRoutes();
-  }
-  delay(50);
-  observer_web_server->begin();
-  observer_web_sta_running = true;
-  observer_web_ap_running = false;
-  observer_web_sta_started_at = millis();
-  observer_web_sta_next_attempt = millis() + OBSERVER_WEB_VIEW_RETRY_MS;
-  if (status && status_size) snprintf(status, status_size, "View connecting");
-  return true;
-}
-
-void MyMesh::stopObserverWebStaView() {
-  if (!observer_web_sta_running) return;
-  if (observer_web_server) {
-    observer_web_server->end();
-  }
-  WiFi.disconnect(true);
-  WiFi.softAPdisconnect(true);
-  WiFi.mode(WIFI_OFF);
-  observer_web_sta_running = false;
-  observer_web_sta_next_attempt = 0;
-  observer_web_sta_started_at = 0;
-}
-
-void MyMesh::setObserverPosition(double lat, double lon) {
-  _prefs.node_lat = lat;
-  _prefs.node_lon = lon;
-  savePrefs();
-}
-
-bool MyMesh::toggleObserverWebAp(char* status, size_t status_size) {
-  if (observer_web_ap_running) {
-    stopObserverWebAp();
-    if (status && status_size) snprintf(status, status_size, "AP stopped");
-    return false;
-  }
-  startObserverWebAp(status, status_size);
-  return observer_web_ap_running;
-}
-
-bool MyMesh::toggleObserverWebStaView(char* status, size_t status_size) {
-  if (observer_web_sta_running) {
-    stopObserverWebStaView();
-    if (status && status_size) snprintf(status, status_size, "View stopped");
-    return false;
-  }
-  startObserverWebStaView(status, status_size);
-  return observer_web_sta_running;
-}
-
-void MyMesh::getObserverWebApLine(char* dest, size_t dest_size) const {
-  if (!dest || dest_size == 0) return;
-  if (observer_web_sta_running) {
-    if (WiFi.status() == WL_CONNECTED) {
-      snprintf(dest, dest_size, "View:on %s", WiFi.localIP().toString().c_str());
-    } else {
-      snprintf(dest, dest_size, "View:wifi...");
-    }
-    return;
-  }
-  if (!observer_web_ap_running) {
-    snprintf(dest, dest_size, "AP:off");
-    return;
-  }
-  snprintf(dest, dest_size, "AP:on C:%u %s",
-           (unsigned int)WiFi.softAPgetStationNum(),
-           WiFi.softAPIP().toString().c_str());
-}
-#endif
-
-void MyMesh::resetObserverLiveStats() {
-  OBSERVER_LOCK();
-  observer_rx_packets = 0;
-  observer_mqtt_published = 0;
-  memset(observer_paths, 0, sizeof(observer_paths));
-  memset(observer_last_hops, 0, sizeof(observer_last_hops));
-  memset(observer_scopes, 0, sizeof(observer_scopes));
-  OBSERVER_UNLOCK();
-}
-
-void MyMesh::hibernate() {
-#if defined(WITH_MQTT_OBSERVER)
-  mqtt_observer.end();
-#endif
-  radio_driver.powerOff();
-
-#if defined(ESP32) && defined(PIN_USER_BTN)
-  esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_ALL);
-  esp_sleep_pd_config(ESP_PD_DOMAIN_RTC_PERIPH, ESP_PD_OPTION_ON);
-
-  rtc_gpio_pullup_en((gpio_num_t)PIN_USER_BTN);
-  rtc_gpio_pulldown_dis((gpio_num_t)PIN_USER_BTN);
-  rtc_gpio_set_direction((gpio_num_t)PIN_USER_BTN, RTC_GPIO_MODE_INPUT_ONLY);
-
-#if defined(ESP_EXT1_WAKEUP_ANY_LOW)
-  esp_sleep_enable_ext1_wakeup(1ULL << PIN_USER_BTN, ESP_EXT1_WAKEUP_ANY_LOW);
-#else
-  esp_sleep_enable_ext0_wakeup((gpio_num_t)PIN_USER_BTN, 0);
-#endif
-  esp_deep_sleep_start();
-#else
-  if (_board) _board->sleep(0);
-#endif
 }
 
 void MyMesh::applyTempRadioParams(float freq, float bw, uint8_t sf, uint8_t cr, int timeout_mins) {
@@ -3256,9 +1056,13 @@ void MyMesh::setTxPower(int8_t power_dbm) {
   radio_driver.setTxPower(power_dbm);
 }
 
-#if defined(USE_SX1262) || defined(USE_SX1268)
-void MyMesh::setRxBoostedGain(bool enable) {
-  radio_driver.setRxBoostedGainMode(enable);
+bool MyMesh::setRxBoostedGain(bool enable) {
+  return radio_driver.setRxBoostedGainMode(enable);
+}
+
+#if defined(USE_LR2021)
+bool MyMesh::configSideDetectors(const uint8_t sideDetSFs[], uint8_t num, float bw) {
+  return radio_driver.configSideDetectors(sideDetSFs, num, bw);
 }
 #endif
 
@@ -3411,89 +1215,8 @@ void MyMesh::handleCommand(uint32_t sender_timestamp, char *command, char *reply
     command += 3;
   }
 
-  if (strcmp(command, "remote on") == 0 || strcmp(command, "remote.on") == 0) {
-    if (!_ui_task) {
-      strcpy(reply, "Err - display n/a");
-    } else {
-      _ui_task->setRemoteMode(true);
-      strcpy(reply, "Remote on");
-    }
-  } else if (strcmp(command, "remote off") == 0 || strcmp(command, "remote.off") == 0) {
-    if (!_ui_task) {
-      strcpy(reply, "Err - display n/a");
-    } else {
-      _ui_task->setRemoteMode(false);
-      strcpy(reply, "Remote off");
-    }
-  } else if (strcmp(command, "remote status") == 0 || strcmp(command, "remote.status") == 0) {
-    if (!_ui_task) {
-      strcpy(reply, "Remote n/a");
-    } else {
-      snprintf(reply, 160, "Remote:%s screen:%u %s",
-               _ui_task->isRemoteMode() ? "on" : "off",
-               (unsigned int)_ui_task->currentScreen(),
-               UITask::screenName(_ui_task->currentScreen()));
-    }
-  } else if (strcmp(command, "show.status") == 0 || strcmp(command, "show status") == 0) {
-    if (!_ui_task || !_ui_task->showScreenByName("status")) strcpy(reply, "Err - bad screen");
-    else strcpy(reply, "Show status");
-  } else if (strcmp(command, "show.paths") == 0 || strcmp(command, "show paths") == 0) {
-    if (!_ui_task || !_ui_task->showScreenByName("paths")) strcpy(reply, "Err - bad screen");
-    else strcpy(reply, "Show paths");
-  } else if (strcmp(command, "show.heards") == 0 || strcmp(command, "show heards") == 0) {
-    if (!_ui_task || !_ui_task->showScreenByName("heards")) strcpy(reply, "Err - bad screen");
-    else strcpy(reply, "Show heards");
-  } else if (strcmp(command, "show.heatstrip") == 0 || strcmp(command, "show heatstrip") == 0 ||
-             strcmp(command, "show.heat") == 0 || strcmp(command, "show heat") == 0) {
-    if (!_ui_task || !_ui_task->showScreenByName("heatstrip", "Heat refreshed")) strcpy(reply, "Err - bad screen");
-    else strcpy(reply, "Show heatstrip");
-  } else if (strcmp(command, "show.load") == 0 || strcmp(command, "show load") == 0) {
-    if (!_ui_task || !_ui_task->showScreenByName("load")) strcpy(reply, "Err - bad screen");
-    else strcpy(reply, "Show load");
-  } else if (strcmp(command, "show.savepoints") == 0 || strcmp(command, "show savepoints") == 0) {
-    if (!_ui_task || !_ui_task->showScreenByName("savepoints")) strcpy(reply, "Err - bad screen");
-    else strcpy(reply, "Show savepoints");
-  } else if (strcmp(command, "show.scopes") == 0 || strcmp(command, "show scopes") == 0) {
-    if (!_ui_task || !_ui_task->showScreenByName("scopes")) strcpy(reply, "Err - bad screen");
-    else strcpy(reply, "Show scopes");
-  } else if (strcmp(command, "show.mqtt") == 0 || strcmp(command, "show mqtt") == 0) {
-    if (!_ui_task || !_ui_task->showScreenByName("mqtt")) strcpy(reply, "Err - bad screen");
-    else strcpy(reply, "Show mqtt");
-  } else if (strcmp(command, "show.next") == 0 || strcmp(command, "show next") == 0) {
-    if (!_ui_task) {
-      strcpy(reply, "Err - display n/a");
-    } else {
-      _ui_task->showNext();
-      snprintf(reply, 160, "Show %s", UITask::screenName(_ui_task->currentScreen()));
-    }
-  } else if (strcmp(command, "show.prev") == 0 || strcmp(command, "show previous") == 0 ||
-             strcmp(command, "show.previous") == 0 || strcmp(command, "show prev") == 0) {
-    if (!_ui_task) {
-      strcpy(reply, "Err - display n/a");
-    } else {
-      _ui_task->showPrevious();
-      snprintf(reply, 160, "Show %s", UITask::screenName(_ui_task->currentScreen()));
-    }
-  } else if (strcmp(command, "show.refresh") == 0 || strcmp(command, "show refresh") == 0) {
-    if (!_ui_task) {
-      strcpy(reply, "Err - display n/a");
-    } else {
-      _ui_task->refreshNow("Refreshed");
-      snprintf(reply, 160, "Show %s refreshed", UITask::screenName(_ui_task->currentScreen()));
-    }
-  } else if (strcmp(command, "show.status?") == 0 || strcmp(command, "show status?") == 0 ||
-             strcmp(command, "show.current") == 0 || strcmp(command, "show current") == 0) {
-    if (!_ui_task) {
-      strcpy(reply, "Show n/a");
-    } else {
-      snprintf(reply, 160, "Show screen:%u %s remote:%s",
-               (unsigned int)_ui_task->currentScreen(),
-               UITask::screenName(_ui_task->currentScreen()),
-               _ui_task->isRemoteMode() ? "on" : "off");
-    }
-  }
   // handle ACL related commands
-  else if (memcmp(command, "setperm ", 8) == 0) {   // format:  setperm {pubkey-hex} {permissions-int8}
+  if (memcmp(command, "setperm ", 8) == 0) {   // format:  setperm {pubkey-hex} {permissions-int8}
     char* hex = &command[8];
     char* sp = strchr(hex, ' ');   // look for separator char
     if (sp == NULL) {
@@ -3526,247 +1249,7 @@ void MyMesh::handleCommand(uint32_t sender_timestamp, char *command, char *reply
       Serial.printf("\n");
     }
     reply[0] = 0;
-  }
-#if defined(ENABLE_OBSERVER_WEB_AP) && defined(ESP32)
-  else if (strcmp(command, "web.ap on") == 0 || strcmp(command, "web.ap") == 0 || strcmp(command, "ap.on") == 0) {
-    startObserverWebAp(reply, 160);
-  } else if (strcmp(command, "web.ap off") == 0 || strcmp(command, "ap.off") == 0) {
-    stopObserverWebAp();
-    strcpy(reply, "AP stopped");
-  } else if (strcmp(command, "web.ap status") == 0 || strcmp(command, "ap.status") == 0) {
-    if (observer_web_ap_running) {
-      snprintf(reply, 160, "AP http://%s ssid:%s", WiFi.softAPIP().toString().c_str(), OBSERVER_WEB_AP_SSID);
-    } else {
-      strcpy(reply, "AP stopped");
-    }
-  } else if (strcmp(command, "web.view on") == 0 || strcmp(command, "web.view") == 0 || strcmp(command, "view.on") == 0) {
-    startObserverWebStaView(reply, 160);
-  } else if (strcmp(command, "web.view off") == 0 || strcmp(command, "view.off") == 0) {
-    stopObserverWebStaView();
-    strcpy(reply, "View stopped");
-  } else if (strcmp(command, "web.view status") == 0 || strcmp(command, "view.status") == 0) {
-    if (observer_web_sta_running) {
-      if (WiFi.status() == WL_CONNECTED) {
-        snprintf(reply, 160, "View http://%s mqtt:off", WiFi.localIP().toString().c_str());
-      } else {
-        strcpy(reply, "View connecting mqtt:off");
-      }
-    } else {
-      strcpy(reply, "View stopped");
-    }
-  }
-#endif
-#ifdef WITH_MQTT_OBSERVER
-  else if (strcmp(command, "mqtt on") == 0 || strcmp(command, "mqtt.on") == 0) {
-    setObserverMqttEnabled(true);
-    strcpy(reply, "MQTT on");
-  } else if (strcmp(command, "mqtt off") == 0 || strcmp(command, "mqtt.off") == 0) {
-    setObserverMqttEnabled(false);
-    strcpy(reply, "MQTT off");
-  } else if (strcmp(command, "mqtt status") == 0 || strcmp(command, "mqtt.status") == 0) {
-    snprintf(reply, 160, "MQTT:%s running:%u host:%s", getObserverMqttStatus(),
-             (unsigned int)mqtt_observer.isRunning(), _prefs.mqtt_host);
-  }
-#endif
-#ifdef ENABLE_OBSERVER_SAVEPOINTS
-  else if (strcmp(command, "sp.create") == 0) {
-    char status[32];
-#if defined(ENABLE_OBSERVER_WEB_AP) && defined(ESP32)
-    uint16_t rx_bins[12];
-    uint16_t air_bins[12];
-    uint8_t bin_index;
-    updateObserverWebMetrics();
-    OBSERVER_LOCK();
-    memcpy(rx_bins, observer_web_rx_bins, sizeof(rx_bins));
-    memcpy(air_bins, observer_web_air_bins, sizeof(air_bins));
-    bin_index = observer_web_bin_index;
-    OBSERVER_UNLOCK();
-    createObserverSavepoint(rx_bins, air_bins, 12, bin_index, status, sizeof(status));
-#else
-    createObserverSavepoint(nullptr, nullptr, 0, 0, status, sizeof(status));
-#endif
-    StrHelper::strncpy(reply, status, 160);
-  } else if (strcmp(command, "sp.list") == 0) {
-    File f = _fs->open(SAVEPOINT_INDEX_FILE);
-    if (!f) {
-      strcpy(reply, "SP none");
-    } else {
-      char *dp = reply;
-      char line[OBSERVER_SAVEPOINT_LINE_SIZE];
-      uint8_t count = 0;
-      while (readLine(f, line, sizeof(line))) {
-        unsigned int id = 0;
-        unsigned long ts = 0;
-        unsigned long rx = 0;
-        int nf = 0;
-        if (sscanf(line, "%u,%lu,%lu,%d", &id, &ts, &rx, &nf) != 4) continue;
-
-        DateTime dt((uint32_t)ts);
-        int written = snprintf(dp, 160 - (dp - reply), "%s%u,%02d%02d,%lu,%d",
-                               count ? "\n" : "",
-                               id,
-                               dt.hour(),
-                               dt.minute(),
-                               rx,
-                               nf);
-        if (written < 0 || written >= 160 - (dp - reply)) break;
-        dp += written;
-        count++;
-      }
-      f.close();
-      if (count == 0) strcpy(reply, "SP none");
-    }
-  } else if (memcmp(command, "sp.show ", 8) == 0) {
-    char* arg = &command[8];
-    uint16_t id = (uint16_t)atoi(arg);
-    char* sp = strchr(arg, ' ');
-    char filename[16];
-    formatSavepointFilename(filename, sizeof(filename), id);
-    File f = _fs->open(filename);
-    if (!f) {
-      strcpy(reply, "Err - SP not found");
-    } else if (sp == NULL) {
-      char datetime[6] = "--:--";
-      char rx[12] = "?";
-      char mqtt[12] = "?";
-      char nf[8] = "?";
-      char snr[8] = "?";
-      char batt[8] = "?";
-      char path[40] = "";
-      char heard[40] = "";
-      char line[96];
-
-      while (readLine(f, line, sizeof(line))) {
-        if (memcmp(line, "meta,datetime_utc,", 18) == 0) {
-          char* t = strchr(&line[18], 'T');
-          if (t && strlen(t) >= 6) {
-            datetime[0] = t[1];
-            datetime[1] = t[2];
-            datetime[2] = ':';
-            datetime[3] = t[4];
-            datetime[4] = t[5];
-            datetime[5] = 0;
-          }
-        } else if (memcmp(line, "counter,rx_total,", 17) == 0) {
-          StrHelper::strncpy(rx, &line[17], sizeof(rx));
-        } else if (memcmp(line, "counter,mqtt_total,", 19) == 0) {
-          StrHelper::strncpy(mqtt, &line[19], sizeof(mqtt));
-        } else if (memcmp(line, "radio,noise_floor,", 18) == 0) {
-          StrHelper::strncpy(nf, &line[18], sizeof(nf));
-        } else if (memcmp(line, "radio,last_snr_x4,", 19) == 0) {
-          int snr_x4 = atoi(&line[19]);
-          formatSnrX4(snr, sizeof(snr), snr_x4);
-        } else if (memcmp(line, "power,battery_mv,", 17) == 0) {
-          StrHelper::strncpy(batt, &line[17], sizeof(batt));
-        } else if (path[0] == 0 && memcmp(line, "path,", 5) == 0) {
-          char* value = strchr(&line[5], ',');
-          if (value) StrHelper::strncpy(path, value + 1, sizeof(path));
-        } else if (heard[0] == 0 && memcmp(line, "heard,", 6) == 0) {
-          char* value = strchr(&line[6], ',');
-          if (value) StrHelper::strncpy(heard, value + 1, sizeof(heard));
-        }
-      }
-      f.close();
-
-      snprintf(reply, 160, "SP%u %s rx=%s mqtt=%s nf=%s snr=%s bat=%s\nP %s\nH %s",
-               (unsigned int)id,
-               datetime,
-               rx,
-               mqtt,
-               nf,
-               snr,
-               batt,
-               path[0] ? path : "-",
-               heard[0] ? heard : "-");
-    } else {
-      uint8_t page = (uint8_t)atoi(sp + 1);
-      char *dp = reply;
-      char line[96];
-      uint8_t line_no = 0;
-      uint8_t emitted = 0;
-      uint8_t page_start = page * 4;
-      while (readLine(f, line, sizeof(line))) {
-        if (line_no++ < page_start) continue;
-        if (emitted >= 4) break;
-        int written = snprintf(dp, 160 - (dp - reply), "%s%s", emitted ? "\n" : "", line);
-        if (written < 0 || written >= 160 - (dp - reply)) break;
-        dp += written;
-        emitted++;
-      }
-      f.close();
-      if (emitted == 0) {
-        strcpy(reply, "SP EOF");
-      }
-    }
-  } else if (memcmp(command, "sp.delete ", 10) == 0) {
-    uint16_t delete_id = (uint16_t)atoi(&command[10]);
-    char filename[16];
-    formatSavepointFilename(filename, sizeof(filename), delete_id);
-    bool removed_file = _fs->remove(filename);
-    File in = _fs->open(SAVEPOINT_INDEX_FILE);
-    File out = _fs->open("/sp_index.tmp", "w");
-    bool removed_index = false;
-    if (in && out) {
-      char line[OBSERVER_SAVEPOINT_LINE_SIZE];
-      while (readLine(in, line, sizeof(line))) {
-        unsigned int id = 0;
-        if (sscanf(line, "%u,", &id) == 1 && id == delete_id) {
-          removed_index = true;
-          continue;
-        }
-        out.println(line);
-      }
-    }
-    if (in) in.close();
-    if (out) out.close();
-    _fs->remove(SAVEPOINT_INDEX_FILE);
-    _fs->rename("/sp_index.tmp", SAVEPOINT_INDEX_FILE);
-    strcpy(reply, (removed_file || removed_index) ? "OK - SP deleted" : "Err - SP not found");
-  } else if (strcmp(command, "sp.clear") == 0) {
-    File f = _fs->open(SAVEPOINT_INDEX_FILE);
-    if (f) {
-      char line[OBSERVER_SAVEPOINT_LINE_SIZE];
-      while (readLine(f, line, sizeof(line))) {
-        unsigned int id = 0;
-        if (sscanf(line, "%u,", &id) == 1) {
-          char filename[16];
-          formatSavepointFilename(filename, sizeof(filename), (uint16_t)id);
-          _fs->remove(filename);
-        }
-      }
-      f.close();
-    }
-    _fs->remove(SAVEPOINT_INDEX_FILE);
-    strcpy(reply, "OK - SP cleared");
-  }
-#endif
-  else if (strcmp(command, "help") == 0 || strcmp(command, "?") == 0 ||
-           strcmp(command, "wp.help") == 0 || strcmp(command, "help wp") == 0) {
-    StrHelper::strncpy(reply,
-                       "diag\n"
-                       "remote.on/off/status\n"
-                       "show.* (help show)\n"
-                       "ap/view/mqtt .on/off/status\n"
-                       "sp.* (help sp)\n"
-                       "discover.neighbors",
-                       160);
-  } else if (strcmp(command, "help show") == 0 || strcmp(command, "show.help") == 0) {
-    StrHelper::strncpy(reply,
-                       "show.status/paths/heards\n"
-                       "show.heatstrip/load\n"
-                       "show.savepoints/scopes/mqtt\n"
-                       "show.next/prev/refresh/current",
-                       160);
-  } else if (strcmp(command, "help sp") == 0 || strcmp(command, "sp.help") == 0) {
-    StrHelper::strncpy(reply,
-                       "sp.create\n"
-                       "sp.list\n"
-                       "sp.show <id> [page]\n"
-                       "sp.delete <id>\n"
-                       "sp.clear",
-                       160);
-  }
-  else if (memcmp(command, "discover.neighbors", 18) == 0) {
+  } else if (memcmp(command, "discover.neighbors", 18) == 0) {
     const char* sub = command + 18;
     while (*sub == ' ') sub++;
     if (*sub != 0) {
@@ -3775,63 +1258,26 @@ void MyMesh::handleCommand(uint32_t sender_timestamp, char *command, char *reply
       sendNodeDiscoverReq();
       strcpy(reply, "OK - Discover sent");
     }
-  } else if (strcmp(command, "diag") == 0) {
-    char diag[96];
-    char health[140];
-    getObserverDiagLine(diag, sizeof(diag));
-    getObserverHealthLine(health, sizeof(health));
-    snprintf(reply, 160, "%s Up:%lus RX:%lu MQTT:%lu\n%s",
-             diag,
-             (unsigned long)(millis() / 1000),
-             (unsigned long)observer_rx_packets,
-             (unsigned long)observer_mqtt_published,
-             health);
   } else{
     _cli.handleCommand(sender_timestamp, command, reply);  // common CLI commands
   }
 }
 
 void MyMesh::loop() {
-#if defined(ENABLE_OBSERVER_WEB_AP) && defined(ESP32)
-  setObserverHealthPhase(48);
-  updateObserverWebMetrics();
-  if (observer_web_sta_running && WiFi.status() != WL_CONNECTED && (long)(millis() - observer_web_sta_next_attempt) >= 0) {
-    unsigned long now = millis();
-    if (observer_web_sta_started_at && (long)(now - observer_web_sta_started_at) >= (long)OBSERVER_WEB_VIEW_FALLBACK_MS) {
-      startObserverWebAp(nullptr, 0);
-    } else {
-      WiFi.disconnect(false);
-      WiFi.mode(WIFI_STA);
-      WiFi.begin(_prefs.wifi_ssid, _prefs.wifi_password);
-      observer_web_sta_next_attempt = now + OBSERVER_WEB_VIEW_RETRY_MS;
-    }
-  }
-#endif
 #ifdef WITH_BRIDGE
-  setObserverHealthPhase(49);
   bridge.loop();
 #endif
-#ifdef WITH_MQTT_OBSERVER
-  setObserverHealthPhase(50);
-  mqtt_observer.loop(getRTCClock()->getCurrentTime());
-#endif
 
-  setObserverHealthPhase(51);
   mesh::Mesh::loop();
 
   if (next_flood_advert && millisHasNowPassed(next_flood_advert)) {
-    setObserverHealthPhase(52);
-    setObserverHealthMarker(OBS_MARKER_FLOOD_ADVERT);
-    uint32_t flood_started = millis();
     mesh::Packet *pkt = createSelfAdvert();
     uint32_t delay_millis = 0;
     if (pkt) sendFloodScoped(default_scope, pkt, delay_millis, _prefs.path_hash_mode + 1);
 
     updateFloodAdvertTimer(); // schedule next flood advert
     updateAdvertTimer();      // also schedule local advert (so they don't overlap)
-    noteObserverTiming(OBS_MARKER_FLOOD_ADVERT, millis() - flood_started);
   } else if (next_local_advert && millisHasNowPassed(next_local_advert)) {
-    setObserverHealthPhase(53);
     mesh::Packet *pkt = createSelfAdvert();
     if (pkt) sendZeroHop(pkt);
 
@@ -3839,14 +1285,12 @@ void MyMesh::loop() {
   }
 
   if (set_radio_at && millisHasNowPassed(set_radio_at)) { // apply pending (temporary) radio params
-    setObserverHealthPhase(54);
     set_radio_at = 0;                                     // clear timer
     radio_driver.setParams(pending_freq, pending_bw, pending_sf, pending_cr);
     MESH_DEBUG_PRINTLN("Temp radio params");
   }
 
   if (revert_radio_at && millisHasNowPassed(revert_radio_at)) { // revert radio params to orig
-    setObserverHealthPhase(55);
     revert_radio_at = 0;                                        // clear timer
     radio_driver.setParams(_prefs.freq, _prefs.bw, _prefs.sf, _prefs.cr);
     MESH_DEBUG_PRINTLN("Radio params restored");
@@ -3854,30 +1298,20 @@ void MyMesh::loop() {
 
   // is pending dirty contacts write needed?
   if (dirty_contacts_expiry && millisHasNowPassed(dirty_contacts_expiry)) {
-    setObserverHealthPhase(56);
     acl.save(_fs);
     dirty_contacts_expiry = 0;
   }
 
   // update uptime
-  setObserverHealthPhase(57);
   uint32_t now = millis();
   uptime_millis += now - last_millis;
   last_millis = now;
-  updateObserverHealth();
-  setObserverHealthPhase(0);
 }
 
 // To check if there is pending work
 bool MyMesh::hasPendingWork() const {
 #if defined(WITH_BRIDGE)
   if (bridge.isRunning()) return true;  // bridge needs WiFi radio, can't sleep
-#endif
-#if defined(ENABLE_OBSERVER_WEB_AP) && defined(ESP32)
-  if (observer_web_ap_running || observer_web_sta_running) return true;
-#endif
-#if defined(WITH_MQTT_OBSERVER)
-  if (mqtt_observer.isRunning()) return true;
 #endif
   return _mgr->getOutboundTotal() > 0;
 }

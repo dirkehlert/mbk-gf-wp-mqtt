@@ -53,20 +53,20 @@ public:
 
   int render(DisplayDriver& display) override {
     // meshcore logo
-    display.setColor(DisplayDriver::BLUE);
+    display.setColor(UIColor::corp_blue);
     int logoWidth = 128;
     display.drawXbm((display.width() - logoWidth) / 2, 3, meshcore_logo, logoWidth, 13);
 
     // meshcore website
     const char* website = "https://meshcore.io";
-    display.setColor(DisplayDriver::LIGHT);
+    display.setColor(UIColor::primary_txt);
     display.setTextSize(1);
     uint16_t websiteWidth = display.getTextWidth(website);
     display.setCursor((display.width() - websiteWidth) / 2, 22);
     display.print(website);
 
     // version info
-    display.setColor(DisplayDriver::LIGHT);
+    display.setColor(UIColor::primary_txt);
     display.setTextSize(1);
     display.drawTextCentered(display.width()/2, 35, _version_info);
 
@@ -322,11 +322,11 @@ class HomeScreen : public UIScreen {
       }
     }
 
-    display.setColor(DisplayDriver::GREEN);
+    display.setColor(UIColor::title_txt);
     display.setTextSize(1);
     display.setCursor(0, 20);
     display.print("Heatstrip");
-    display.setColor(DisplayDriver::LIGHT);
+    display.setColor(UIColor::primary_txt);
     if (row_count == 0) {
       display.drawTextEllipsized(0, 38, display.width(), "No RX paths");
       return;
@@ -385,12 +385,12 @@ class HomeScreen : public UIScreen {
     formatLoadPct(max_pct, sizeof(max_pct), max_pct_x10);
     formatLoadPct(avg_pct, sizeof(avg_pct), avg_pct_x10);
 
-    display.setColor(DisplayDriver::GREEN);
+    display.setColor(UIColor::title_txt);
     display.setTextSize(1);
     int top = contentTop(display);
     display.setCursor(0, top);
     display.print("Load");
-    display.setColor(DisplayDriver::LIGHT);
+    display.setColor(UIColor::primary_txt);
     char line[48];
     snprintf(line, sizeof(line), "Now %s Max %s", now_pct, max_pct);
     display.drawTextEllipsized(0, top + 12, display.width(), line);
@@ -453,12 +453,12 @@ class HomeScreen : public UIScreen {
     refreshFavouriteChats();
 
     display.setTextSize(1);
-    display.setColor(DisplayDriver::GREEN);
+    display.setColor(UIColor::title_txt);
     display.drawTextEllipsized(0, 20, display.width(), "Position track");
 
     char line[64];
     if (track_mode == TRACK_MODE_CONTACT) {
-      display.setColor(DisplayDriver::LIGHT);
+      display.setColor(UIColor::primary_txt);
       if (track_fav_count == 0) {
         display.drawTextEllipsized(0, 42, display.width(), "No fav chat contacts");
       } else {
@@ -470,21 +470,21 @@ class HomeScreen : public UIScreen {
                  filtered_name);
         display.drawTextEllipsized(0, 42, display.width(), line);
       }
-      display.setColor(DisplayDriver::GREEN);
+      display.setColor(UIColor::title_txt);
       display.drawTextCentered(display.width() / 2, 78, "click: next");
       display.drawTextCentered(display.width() / 2, 94, "hold: time");
       return;
     }
 
     if (track_mode == TRACK_MODE_DURATION) {
-      display.setColor(DisplayDriver::LIGHT);
+      display.setColor(UIColor::primary_txt);
       if (track_durations[track_duration_idx] == 0) {
         snprintf(line, sizeof(line), "Duration: twice");
       } else {
         snprintf(line, sizeof(line), "Duration: %umin", (unsigned int)track_durations[track_duration_idx]);
       }
       display.drawTextEllipsized(0, 42, display.width(), line);
-      display.setColor(DisplayDriver::GREEN);
+      display.setColor(UIColor::title_txt);
       display.drawTextCentered(display.width() / 2, 78, "click: next");
       display.drawTextCentered(display.width() / 2, 94, "hold: start");
       return;
@@ -493,7 +493,7 @@ class HomeScreen : public UIScreen {
     PositionTrackInfo info;
     the_mesh.getPositionTrackInfo(info);
     if (!info.active && !info.has_position) {
-      display.setColor(DisplayDriver::LIGHT);
+      display.setColor(UIColor::primary_txt);
       display.drawTextEllipsized(0, 38, display.width(), "hold: select fav");
       display.drawTextEllipsized(0, 52, display.width(), "tracks every minute");
       return;
@@ -520,9 +520,9 @@ class HomeScreen : public UIScreen {
                bearingLabel(info.bearing_deg),
                (unsigned int)info.bearing_deg,
                dist);
-      display.setColor(DisplayDriver::YELLOW);
+      display.setColor(UIColor::secondary_txt);
       display.drawTextEllipsized(0, 63, display.width(), line);
-      display.setColor(DisplayDriver::LIGHT);
+      display.setColor(UIColor::primary_txt);
       snprintf(line, sizeof(line), "age %us ref:%s",
                (unsigned int)info.age_secs,
                info.ref_is_live_gps ? "gps" : "saved");
@@ -536,7 +536,7 @@ class HomeScreen : public UIScreen {
       }
       display.drawTextEllipsized(0, 91, display.width(), line);
     } else {
-      display.setColor(info.has_error ? DisplayDriver::RED : DisplayDriver::LIGHT);
+      display.setColor(info.has_error ? UIColor::warning_txt : UIColor::primary_txt);
       display.drawTextEllipsized(0, 68, display.width(), info.waiting ? "waiting target..." : "no target position");
       snprintf(line, sizeof(line), "q%u r%u ng%u %s",
                (unsigned int)info.req_count,
@@ -573,7 +573,7 @@ class HomeScreen : public UIScreen {
     refreshFavouritePositions();
 
     display.setTextSize(1);
-    display.setColor(DisplayDriver::GREEN);
+    display.setColor(UIColor::title_txt);
 
     char line[64];
     float max_dist = 100.0f;
@@ -581,7 +581,7 @@ class HomeScreen : public UIScreen {
       if (favourite_positions[i].distance_m > max_dist) max_dist = favourite_positions[i].distance_m;
     }
     if (position_count == 0) {
-      display.setColor(DisplayDriver::LIGHT);
+      display.setColor(UIColor::primary_txt);
       display.drawTextEllipsized(0, 32, display.width(), "No fav positions");
       display.drawTextEllipsized(0, 46, display.width(), "track or receive adverts");
       return;
@@ -603,7 +603,7 @@ class HomeScreen : public UIScreen {
     const int cx = compact ? 36 : display.width() / 2;
     const int cy = compact ? 35 : 62;
     const int radius = compact ? 21 : 38;
-    display.setColor(DisplayDriver::DARK);
+    display.setColor(UIColor::window_bkg);
     display.drawRect(cx - radius, cy - radius, radius * 2, radius * 2);
     display.drawRect(cx - (radius * 2 / 3), cy - (radius * 2 / 3), radius * 4 / 3, radius * 4 / 3);
     display.drawRect(cx - (radius / 3), cy - (radius / 3), radius * 2 / 3, radius * 2 / 3);
@@ -623,7 +623,7 @@ class HomeScreen : public UIScreen {
       if (py > cy + radius - 2) py = cy + radius - 2;
 
       bool selected = !overview && i == selected_idx;
-      display.setColor(selected ? DisplayDriver::YELLOW : DisplayDriver::LIGHT);
+      display.setColor(selected ? UIColor::secondary_txt : UIColor::primary_txt);
       if (pos.source == FAV_POSITION_SOURCE_TRACK) {
         display.fillRect(px - 2, py - 2, 5, 5);
       } else if (selected) {
@@ -635,11 +635,11 @@ class HomeScreen : public UIScreen {
     }
 
     if (overview) {
-      display.setColor(DisplayDriver::YELLOW);
+      display.setColor(UIColor::secondary_txt);
       snprintf(line, sizeof(line), "Overview %u nodes", (unsigned int)position_count);
       display.drawTextEllipsized(compact ? 74 : 0, compact ? 18 : 105,
                                  compact ? display.width() - 74 : display.width(), line);
-      display.setColor(DisplayDriver::LIGHT);
+      display.setColor(UIColor::primary_txt);
       display.drawTextEllipsized(compact ? 74 : 86, compact ? 31 : 117,
                                  display.width() - (compact ? 74 : 86), scale);
       return;
@@ -650,13 +650,13 @@ class HomeScreen : public UIScreen {
     display.translateUTF8ToBlocks(name, selected.name, sizeof(name));
     char dist[16];
     formatDistance(dist, sizeof(dist), selected.distance_m);
-    display.setColor(DisplayDriver::YELLOW);
+    display.setColor(UIColor::secondary_txt);
     snprintf(line, sizeof(line), "%c %s",
              selected.source == FAV_POSITION_SOURCE_TRACK ? 'T' : 'A',
              name);
     display.drawTextEllipsized(compact ? 74 : 0, compact ? 18 : 105,
                                compact ? display.width() - 74 : display.width(), line);
-    display.setColor(DisplayDriver::LIGHT);
+    display.setColor(UIColor::primary_txt);
     snprintf(line, sizeof(line), "%s %s", dist, bearingLabel(selected.bearing_deg));
     display.drawTextEllipsized(compact ? 74 : 0, compact ? 31 : 117,
                                compact ? display.width() - 74 : 72, line);
@@ -667,7 +667,7 @@ class HomeScreen : public UIScreen {
   const char* getActionName(uint8_t index) const {
     switch (index) {
       case 0: return "Send advert";
-      case 1: return _task->isSerialEnabled() ? "BLE off" : "BLE on";
+      case 1: return _task->isBluetoothEnabled() ? "BLE off" : "BLE on";
       case 2: return the_mesh.isPacketForwardEnabled() ? "Pkt fwd off" : "Pkt fwd on";
       case 3: return "Hibernate";
       default: return "";
@@ -676,28 +676,28 @@ class HomeScreen : public UIScreen {
 
   void renderActions(DisplayDriver& display) {
     display.setTextSize(1);
-    display.setColor(DisplayDriver::GREEN);
+    display.setColor(UIColor::title_txt);
     int top = contentTop(display);
     int row_h = isCompact(display) ? 10 : 16;
     display.drawTextEllipsized(0, top, display.width(), "Actions");
-    display.setColor(DisplayDriver::LIGHT);
+    display.setColor(UIColor::primary_txt);
     for (uint8_t i = 0; i < ACTION_COUNT; i++) {
       char line[40];
       snprintf(line, sizeof(line), "%c %s", i == action_idx ? '>' : ' ', getActionName(i));
-      display.setColor(i == action_idx ? DisplayDriver::YELLOW : DisplayDriver::LIGHT);
+      display.setColor(i == action_idx ? UIColor::secondary_txt : UIColor::primary_txt);
       display.drawTextEllipsized(0, top + 13 + i * row_h, display.width(), line);
     }
   }
 
   void renderHeardRepeaters(DisplayDriver& display) {
     char tmp[80];
-    display.setColor(DisplayDriver::GREEN);
+    display.setColor(UIColor::title_txt);
     display.setTextSize(1);
     int top = contentTop(display);
     int row_h = isCompact(display) ? 10 : 12;
     uint8_t max_rows = isCompact(display) ? 4 : 7;
     display.drawTextEllipsized(0, top, display.width(), "Heard repeaters");
-    display.setColor(DisplayDriver::LIGHT);
+    display.setColor(UIColor::primary_txt);
     bool any = false;
     for (uint8_t i = 0; i < max_rows; i++) {
       if (the_mesh.getMonitorLastHopLine(i, tmp, sizeof(tmp))) {
@@ -710,7 +710,7 @@ class HomeScreen : public UIScreen {
 
   void renderScopes(DisplayDriver& display) {
     uint8_t count = the_mesh.getScopeInfo(scopes, UI_RECENT_LIST_SIZE);
-    display.setColor(DisplayDriver::GREEN);
+    display.setColor(UIColor::title_txt);
     display.setTextSize(1);
     int top = contentTop(display);
     int row_h = isCompact(display) ? 10 : 13;
@@ -728,7 +728,7 @@ class HomeScreen : public UIScreen {
                (unsigned int)the_mesh.getScopeEmptyResponseCount());
     }
     display.drawTextEllipsized(0, top, display.width(), header);
-    display.setColor(DisplayDriver::LIGHT);
+    display.setColor(UIColor::primary_txt);
     if (count == 0) {
       display.drawTextEllipsized(0, top + 14, display.width(), "Longpress to scan");
     } else {
@@ -752,11 +752,11 @@ class HomeScreen : public UIScreen {
       _task->showAlert(the_mesh.advert() ? "Advert sent!" : "Advert failed", 1000);
       actions_panel_open = false;
     } else if (action_idx == 1) {
-      if (_task->isSerialEnabled()) {
-        _task->disableSerial();
+      if (_task->isBluetoothEnabled()) {
+        _task->disableBluetooth();
         _task->showAlert("BLE off", 1000);
       } else {
-        _task->enableSerial();
+        _task->enableBluetooth();
         _task->showAlert("BLE on", 1000);
       }
     } else if (action_idx == 2) {
@@ -821,7 +821,7 @@ class HomeScreen : public UIScreen {
     refreshSendScopes();
 
     display.setTextSize(1);
-    display.setColor(DisplayDriver::GREEN);
+    display.setColor(UIColor::title_txt);
     bool compact = isCompact(display);
     int top = contentTop(display);
     display.setCursor(0, top);
@@ -829,7 +829,7 @@ class HomeScreen : public UIScreen {
 
     char line[64];
     if (send_mode == SEND_MODE_SCOPE) {
-      display.setColor(DisplayDriver::LIGHT);
+      display.setColor(UIColor::primary_txt);
       char filtered_scope[SCOPE_NAME_SIZE];
       display.translateUTF8ToBlocks(filtered_scope, getSendScopeName(send_scope_draft_idx), sizeof(filtered_scope));
       snprintf(line, sizeof(line), "%u/%u %s",
@@ -837,13 +837,13 @@ class HomeScreen : public UIScreen {
                (unsigned int)send_scope_count,
                filtered_scope);
       display.drawTextEllipsized(0, compact ? top + 14 : 42, display.width(), line);
-      display.setColor(DisplayDriver::GREEN);
+      display.setColor(UIColor::title_txt);
       display.drawTextCentered(display.width() / 2, compact ? top + 28 : 78, "click: next");
       if (!compact) display.drawTextCentered(display.width() / 2, 94, "hold: select");
       return;
     }
 
-    display.setColor(send_mode == SEND_MODE_TARGET ? DisplayDriver::YELLOW : DisplayDriver::LIGHT);
+    display.setColor(send_mode == SEND_MODE_TARGET ? UIColor::secondary_txt : UIColor::primary_txt);
     int y_to = compact ? top + 12 : 33;
     int y_msg = compact ? top + 25 : 52;
     int y_text = compact ? top + 37 : 64;
@@ -861,12 +861,12 @@ class HomeScreen : public UIScreen {
     }
     display.drawTextEllipsized(18, y_to, display.width() - 18, line);
 
-    display.setColor(send_mode == SEND_MODE_MESSAGE ? DisplayDriver::YELLOW : DisplayDriver::LIGHT);
+    display.setColor(send_mode == SEND_MODE_MESSAGE ? UIColor::secondary_txt : UIColor::primary_txt);
     uint8_t send_msg_count = getSendMessageCount();
     if (send_msg_idx >= send_msg_count) send_msg_idx = send_msg_count - 1;
     snprintf(line, sizeof(line), "Msg %u/%u", (unsigned int)send_msg_idx + 1, (unsigned int)send_msg_count);
     display.drawTextEllipsized(0, y_msg, display.width(), line);
-    display.setColor(DisplayDriver::LIGHT);
+    display.setColor(UIColor::primary_txt);
     display.drawTextEllipsized(0, y_text, display.width(), getSendMessage(send_msg_idx));
 
     char filtered_scope[SCOPE_NAME_SIZE];
@@ -874,7 +874,7 @@ class HomeScreen : public UIScreen {
     snprintf(line, sizeof(line), "Scope: %s", filtered_scope);
     display.drawTextEllipsized(0, y_scope, display.width(), line);
 
-    display.setColor(DisplayDriver::GREEN);
+    display.setColor(UIColor::title_txt);
     const char* action = "hold: target";
     if (send_mode == SEND_MODE_TARGET) action = "hold: msg";
     else if (send_mode == SEND_MODE_MESSAGE) action = "hold: send";
@@ -901,7 +901,7 @@ class HomeScreen : public UIScreen {
     int iconHeight = compact ? 7 : 10;
     int iconX = display.width() - iconWidth - 5; // Position the icon near the top-right corner
     int iconY = 0;
-    display.setColor(DisplayDriver::GREEN);
+    display.setColor(UIColor::title_txt);
 
     // battery outline
     display.drawRect(iconX, iconY, iconWidth, iconHeight);
@@ -916,7 +916,7 @@ class HomeScreen : public UIScreen {
     // show muted icon if buzzer is muted
 #ifdef PIN_BUZZER
     if (_task->isBuzzerQuiet()) {
-      display.setColor(DisplayDriver::RED);
+      display.setColor(UIColor::warning_txt);
       display.drawXbm(iconX - 9, iconY + 1, muted_icon, 8, 8);
     }
 #endif
@@ -965,7 +965,7 @@ public:
     bool compact = isCompact(display);
     // node name
     display.setTextSize(1);
-    display.setColor(DisplayDriver::GREEN);
+    display.setColor(UIColor::title_txt);
     char filtered_name[sizeof(_node_prefs->node_name)];
     display.translateUTF8ToBlocks(filtered_name, _node_prefs->node_name, sizeof(filtered_name));
     display.drawTextEllipsized(0, 0, compact ? display.width() - 26 : display.width() - 34, filtered_name);
@@ -989,7 +989,7 @@ public:
       if (actions_panel_open) {
         renderActions(display);
       } else {
-        display.setColor(DisplayDriver::YELLOW);
+        display.setColor(UIColor::secondary_txt);
         display.setTextSize(compact ? 1 : 2);
         sprintf(tmp, "MSG: %d", _task->getMsgCount());
         display.drawTextCentered(display.width() / 2, compact ? 13 : 20, tmp);
@@ -1001,18 +1001,18 @@ public:
           display.drawTextCentered(display.width() / 2, compact ? 24 : 54, tmp);
         #endif
         if (_task->hasConnection()) {
-          display.setColor(DisplayDriver::GREEN);
+          display.setColor(UIColor::title_txt);
           display.setTextSize(1);
           display.drawTextCentered(display.width() / 2, compact ? 24 : 43, "< Connected >");
 
         } else if (the_mesh.getBLEPin() != 0) { // BT pin
-          display.setColor(DisplayDriver::RED);
+          display.setColor(UIColor::warning_txt);
           display.setTextSize(compact ? 1 : 2);
           sprintf(tmp, "Pin:%d", the_mesh.getBLEPin());
           display.drawTextCentered(display.width() / 2, compact ? 24 : 43, tmp);
         }
         display.setTextSize(1);
-        display.setColor(DisplayDriver::LIGHT);
+        display.setColor(UIColor::primary_txt);
         snprintf(tmp, sizeof(tmp), "Noise floor: %d", radio_driver.getNoiseFloor());
         display.drawTextEllipsized(0, compact ? 34 : 62, display.width(), tmp);
         snprintf(tmp, sizeof(tmp), "RX: %lu  SNR: %.1f",
@@ -1029,7 +1029,7 @@ public:
       renderSend(display);
     } else if (_page == HomePage::RECENT) {
       the_mesh.getRecentlyHeard(recent, UI_RECENT_LIST_SIZE);
-      display.setColor(DisplayDriver::GREEN);
+      display.setColor(UIColor::title_txt);
       int y = 20;
       for (int i = 0; i < UI_RECENT_LIST_SIZE; i++, y += 11) {
         auto a = &recent[i];
@@ -1573,14 +1573,14 @@ public:
     char tmp[16];
     display.setCursor(0, 0);
     display.setTextSize(1);
-    display.setColor(DisplayDriver::GREEN);
+    display.setColor(UIColor::title_txt);
     sprintf(tmp, "Unread: %d", num_unread);
     display.print(tmp);
 
     if (num_unread <= 0) {
       display.drawRect(0, 11, display.width(), 1);
       display.setCursor(0, 25);
-      display.setColor(DisplayDriver::LIGHT);
+      display.setColor(UIColor::primary_txt);
       display.print("No messages");
 #if AUTO_OFF_MILLIS==0
       return 10000;
@@ -1605,7 +1605,7 @@ public:
     display.drawRect(0, 11, display.width(), 1);  // horiz line
 
     display.setCursor(0, 14);
-    display.setColor(DisplayDriver::YELLOW);
+    display.setColor(UIColor::secondary_txt);
     char filtered_origin[sizeof(p->origin)];
     display.translateUTF8ToBlocks(filtered_origin, p->origin, sizeof(filtered_origin));
     display.print(filtered_origin);
@@ -1620,12 +1620,12 @@ public:
                (unsigned int)p->path_len, filtered_scope);
     }
     display.setCursor(0, 25);
-    display.setColor(DisplayDriver::GREEN);
+    display.setColor(UIColor::title_txt);
     display.drawTextEllipsized(0, 25, display.width(), path_line);
 
     if (reply_mode) {
       display.setCursor(0, 38);
-      display.setColor(DisplayDriver::LIGHT);
+      display.setColor(UIColor::primary_txt);
       display.print(reply_confirm ? "Send?" : "Reply:");
       char reply[112];
       buildReplyText(*p, reply, sizeof(reply));
@@ -1639,7 +1639,7 @@ public:
     }
 
     display.setCursor(0, 38);
-    display.setColor(DisplayDriver::LIGHT);
+    display.setColor(UIColor::primary_txt);
     char filtered_msg[sizeof(p->msg)];
     display.translateUTF8ToBlocks(filtered_msg, p->msg, sizeof(filtered_msg));
     display.printWordWrap(filtered_msg, display.width());
@@ -2089,9 +2089,9 @@ void UITask::loop() {
         _display->setTextSize(1);
         int y = _display->height() / 3;
         int p = _display->height() / 32;
-        _display->setColor(DisplayDriver::DARK);
+        _display->setColor(UIColor::window_bkg);
         _display->fillRect(p, y, _display->width() - p*2, y);
-        _display->setColor(DisplayDriver::LIGHT);  // draw box border
+        _display->setColor(UIColor::primary_txt);  // draw box border
         _display->drawRect(p, y, _display->width() - p*2, y);
         _display->drawTextCentered(_display->width() / 2, y + p*3, _alert);
         _next_refresh = _alert_expiry;   // will need refresh when alert is dismissed
@@ -2128,7 +2128,7 @@ void UITask::loop() {
         if (_display != NULL) {
           _display->startFrame();
           _display->setTextSize(2);
-          _display->setColor(DisplayDriver::RED);
+          _display->setColor(UIColor::warning_txt);
           _display->drawTextCentered(_display->width() / 2, 20, "Low Battery.");
           _display->drawTextCentered(_display->width() / 2, 40, "Shutting Down!");
           _display->endFrame();

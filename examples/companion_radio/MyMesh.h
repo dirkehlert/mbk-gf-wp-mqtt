@@ -8,11 +8,11 @@
 #define FIRMWARE_VER_CODE 13
 
 #ifndef FIRMWARE_BUILD_DATE
-#define FIRMWARE_BUILD_DATE "6 Jun 2026"
+#define FIRMWARE_BUILD_DATE "9 Aug 2026"
 #endif
 
 #ifndef STOCK_FIRMWARE_VERSION
-#define STOCK_FIRMWARE_VERSION "v1.16.0"
+#define STOCK_FIRMWARE_VERSION "v1.17.0"
 #endif
 
 #ifndef FIRMWARE_VERSION
@@ -20,7 +20,7 @@
 #endif
 
 #ifndef CLIENT_FIRMWARE_VERSION
-#define CLIENT_FIRMWARE_VERSION "Moorbock FT1 v1.16"
+#define CLIENT_FIRMWARE_VERSION "Moorbock FT1 v1.17"
 #endif
 
 #ifndef DISPLAY_FIRMWARE_VERSION
@@ -250,12 +250,13 @@ public:
   uint8_t getScopeResponseCount() const { return scope_response_count; }
   uint8_t getScopeDiscoverResponseCount() const { return scope_discover_response_count; }
   uint8_t getScopeEmptyResponseCount() const { return scope_empty_response_count; }
-  bool isPacketForwardEnabled() const { return _prefs.client_repeat != 0; }
+  bool isPacketForwardEnabled() const { return _prefs.isRepeatEn(); }
   bool setPacketForwardEnabled(bool enabled);
 
 protected:
   float getAirtimeBudgetFactor() const override;
   int getInterferenceThreshold() const override;
+  bool getCADEnabled() const override;
   int calcRxDelay(float score, uint32_t air_time) const override;
   uint32_t getRetransmitDelay(const mesh::Packet *packet) override;
   uint32_t getDirectRetransmitDelay(const mesh::Packet *packet) override;
@@ -316,7 +317,11 @@ protected:
   }
 
 public:
-  void savePrefs() { _store->savePrefs(_prefs, sensors.node_lat, sensors.node_lon); }
+  void savePrefs() {
+    _prefs.node_lat = sensors.node_lat;
+    _prefs.node_lon = sensors.node_lon;
+    _store->savePrefs(_prefs);
+  }
 
 #if ENV_INCLUDE_GPS == 1
   void applyGpsPrefs() {

@@ -7,7 +7,6 @@ on:
       - 'src/**'
       - 'examples/**'
       - 'variants/**'
-      - 'tools/observer_host_tests.py'
       - 'platformio.ini'
       - '.github/workflows/pr-build-check.yml'
   push:
@@ -16,37 +15,37 @@ on:
       - 'src/**'
       - 'examples/**'
       - 'variants/**'
-      - 'tools/observer_host_tests.py'
       - 'platformio.ini'
       - '.github/workflows/pr-build-check.yml'
 
 jobs:
-  observer-host-tests:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Clone Repo
-        uses: actions/checkout@v4
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Run observer host tests
-        run: python tools/observer_host_tests.py
-
   build:
     runs-on: ubuntu-latest
-    needs: observer-host-tests
     strategy:
       fail-fast: false
       matrix:
         environment:
-          # Project target plus retained field/reference boards.
-          - Heltec_Wireless_Paper_mqtt_observer
-          - ThinkNode_M1_field_monitor
-          - LilyGo_T-Echo_repeater
-          - WioTrackerL1_repeater
+          # ESP32-S3 (most common platform)
+          - Heltec_v3_companion_radio_ble
+          - Heltec_v3_repeater
+          - Heltec_v3_room_server
+          # nRF52
+          - RAK_4631_companion_radio_ble
+          - RAK_4631_companion_radio_ethernet
+          - RAK_4631_repeater
+          - RAK_4631_repeater_ethernet
+          - RAK_4631_room_server
+          - RAK_4631_room_server_ethernet
+          # RP2040
+          - PicoW_repeater
+          # STM32
+          - wio-e5-mini_repeater
+          # ESP32-C6
+          - LilyGo_Tlora_C6_repeater_
+          # LR1110 (nRF52)
+          - wio_wm1110_repeater
+          # SX1276 (ESP32)
+          - Tbeam_SX1276_repeater
 
     steps:
       - name: Clone Repo
