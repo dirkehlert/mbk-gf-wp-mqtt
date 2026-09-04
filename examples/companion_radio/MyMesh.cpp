@@ -2096,8 +2096,11 @@ bool MyMesh::sendKeepaliveChannel(const char *channel_name, const mesh::Packet *
       send_scope = incoming_scope;
       send_unscoped = false;
     } else {
-      memset(send_scope.key, 0, sizeof(send_scope.key));
-      send_unscoped = true;
+      // Direct requests normally carry no transport code. A channel reply is
+      // still a flood, so use this node's configured default scope instead of
+      // turning it into an unrestricted flood.
+      memcpy(send_scope.key, _prefs.default_scope_key, sizeof(send_scope.key));
+      send_unscoped = false;
     }
     bool sent = sendGroupMessage(getRTCClock()->getCurrentTimeUnique(), channel.channel,
                                  _prefs.node_name, reply, strlen(reply));
