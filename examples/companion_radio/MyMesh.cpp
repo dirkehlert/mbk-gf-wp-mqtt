@@ -2049,8 +2049,10 @@ bool MyMesh::sendKeepaliveReply(const ContactInfo &recipient, const mesh::Packet
       send_scope = incoming_scope;
       send_unscoped = false;
     } else {
-      memset(send_scope.key, 0, sizeof(send_scope.key));
-      send_unscoped = true;
+      // If the direct reply has to be flooded and the request provides no
+      // usable transport code, keep it inside this node's default scope.
+      memcpy(send_scope.key, _prefs.default_scope_key, sizeof(send_scope.key));
+      send_unscoped = false;
     }
   }
 
