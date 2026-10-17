@@ -6,6 +6,9 @@
 #define ENABLE_GxEPD2_GFX 0
 
 #include <GxEPD2_BW.h>
+#if defined(THINKNODE_M1)
+#include <ThinkNodeM1EPD.h>
+#endif
 #include <GxEPD2_3C.h>
 #include <GxEPD2_4C.h>
 #include <GxEPD2_7C.h>
@@ -37,7 +40,7 @@ class GxEPDDisplay : public DisplayDriver {
 #else
 #if defined(THINKNODE_M1)
   // ThinkNode M1 uses GDEH0154D67/SSD1681; do not load the 150_BN LUT.
-  GxEPD2_BW<GxEPD2_154_D67, GxEPD2_154_D67::HEIGHT> display;
+  GxEPD2_BW<ThinkNodeM1EPD, ThinkNodeM1EPD::HEIGHT> display;
 #else
   GxEPD2_BW<GxEPD2_150_BN, 200> display;
 #endif
@@ -58,7 +61,7 @@ public:
 #if defined(EINK_DISPLAY_MODEL)
   GxEPDDisplay() : DisplayDriver(128, 128), display(EINK_DISPLAY_MODEL(PIN_DISPLAY_CS, PIN_DISPLAY_DC, PIN_DISPLAY_RST, PIN_DISPLAY_BUSY)) {}
 #elif defined(THINKNODE_M1)
-  GxEPDDisplay() : DisplayDriver(128, 128), display(GxEPD2_154_D67(DISP_CS, DISP_DC, DISP_RST, DISP_BUSY)) {}
+  GxEPDDisplay() : DisplayDriver(128, 128), display(ThinkNodeM1EPD(DISP_CS, DISP_DC, DISP_RST, DISP_BUSY)) {}
 #else
   GxEPDDisplay() : DisplayDriver(128, 128), display(GxEPD2_150_BN(DISP_CS, DISP_DC, DISP_RST, DISP_BUSY)) {}
 #endif

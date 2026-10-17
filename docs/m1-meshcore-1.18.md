@@ -1,6 +1,6 @@
 # Moorbock M1 Fieldmonitor on MeshCore Companion 1.18.0
 
-Fieldtest version: 1.1.9; client identifier: `MBK FT1.1.9 v1.18` (17 characters).
+Fieldtest version: 1.1.10; client identifier: `MBK FT1.1.10 v1.18` (18 characters).
 
 Port prepared on 2026-10-17. Target: `ThinkNode_M1_companion_radio_ble`.
 
@@ -90,3 +90,6 @@ Evidence: https://github.com/meshtastic/firmware/blob/master/variants/nrf52840/E
 
 ## 1.1.9: full refresh for changed M1 frames
 Hardware feedback for 1.1.8: splash disappears cleanly; first home image has strong contrast, subsequent partial updates fade. Keep D67, use full updates for changed content and explicit startup/wake refresh requests. Identical frames do not refresh. Idle retains the last image; messages still wake the display. This intentionally trades flashing and longer synchronous display updates for contrast. Library declares full_refresh_time=2600ms; actual duration is panel-dependent. Hardware outcome requires confirmation. No partial-LUT tuning or white erase sequence.
+
+## 1.1.10: pinned Meshtastic D67 implementation
+Hardware photo rejects 1.1.9 full-only contrast. The standard GxEPD2 1.6.2 D67 driver differs materially from Meshtastic's pinned M1 D67 driver: post-refresh writes target both planes in standard vs current plane only in fork; fork explicitly initialises/powers on before refresh and uses 0xf4 for full update then separate powerOff, standard uses 0xf7 with integrated power-off. Import the pinned reference as a separate local ThinkNodeM1EPD library; preserve license and command sequencing. Adapt only constructor/SPI API, class names, include, and WIDTH_VISIBLE. Keep full-only policy from 1.1.9 to isolate driver behavior; changed frames flash and block the loop during hardware update. Panel contrast still requires user confirmation; source/register tests cannot prove image quality.
