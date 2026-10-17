@@ -96,3 +96,5 @@ Hardware photo rejects 1.1.9 full-only contrast. The standard GxEPD2 1.6.2 D67 d
 
 ## 1.1.11: restore original 1.17 display implementation
 User confirms original archived 1.17 fallback is much better after flashing it for comparison. Restore GxEPDDisplay.h/.cpp from original commit ba37dc08409beb34862de82b1e2c3108350e8639, with only automatic text wrapping disabled for correct path ellipsis. Thus startup, original 150_BN driver, refresh mode, and idle behavior match the original source: no panel powerOff on idle, no full-refresh scheduling, no custom driver. Remove isolated reference driver and its test. Existing MeshCore 1.18 port and message-wake behavior retained. The restore is evidence-driven but still needs hardware confirmation under 1.18. Residual ghosting is not claimed solved.
+
+Hardwarebestätigung am 17.10.2026: Nutzer bestätigt 1.1.11 nach Empfang und Ruhemodus mit „ja, ist ok so“. Originale Display-Ansteuerung aus 1.17 unter MeshCore 1.18 akzeptiert.
