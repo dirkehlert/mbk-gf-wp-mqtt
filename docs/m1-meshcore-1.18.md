@@ -1,6 +1,6 @@
 # Moorbock M1 Fieldmonitor on MeshCore Companion 1.18.0
 
-Fieldtest version: 1.1.2; client identifier: `MBK FT1.1.2 v1.18` (17 characters).
+Fieldtest version: 1.1.3; client identifier: `MBK FT1.1.3 v1.18` (17 characters).
 
 Port prepared on 2026-10-17. Target: `ThinkNode_M1_companion_radio_ble`.
 
@@ -30,7 +30,7 @@ falls back to the default scope. Temporary send scope state is restored after us
 
 - M1 PlatformIO build: SUCCESS; ARM GCC 14.2.1.
 - RAM: 160136 / 235520 bytes (68.0%).
-- Flash: 414052 / 712704 bytes (58.1%).
+- Flash: 414020 / 712704 bytes (58.1%).
 - 46 upstream native tests passed: serialization, mesh tables, routing, UTF-8, hex.
 - `python3 tools/m1_listener_host_tests.py`: passed with address/undefined sanitizers.
 - `python3 tools/m1_keepalive_host_tests.py`: passed with address/undefined sanitizers.
@@ -65,3 +65,7 @@ For THINKNODE_M1 only, turnOff powers down the EPD without clearing its image or
 ## 1.1.2: refresh on incoming messages
 
 An incoming direct or channel text message wakes an idle E-ink display even when the app is connected over BLE. The current page remains selected, its contents/unread count are refreshed, and the normal idle timer powers the panel down again while preserving the image. OLED behavior is unchanged.
+
+## 1.1.3: prevent accumulated E-ink ghosting
+
+The M1 now renders a complete frame and performs a real full-waveform display update at startup, after waking and after 20 changed partial updates. Forced full refresh also runs if the frame CRC is unchanged. Rendering no longer clears the physical panel before the frame is complete. Idle still retains the image. Other GxEPD targets retain their existing policy. Hardware verification is pending.
