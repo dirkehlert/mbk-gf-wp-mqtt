@@ -1,6 +1,6 @@
 # Moorbock M1 Fieldmonitor on MeshCore Companion 1.18.0
 
-Fieldtest version: 1.1.1; client identifier: `MBK FT1.1.1 v1.18` (17 characters).
+Fieldtest version: 1.1.2; client identifier: `MBK FT1.1.2 v1.18` (17 characters).
 
 Port prepared on 2026-10-17. Target: `ThinkNode_M1_companion_radio_ble`.
 
@@ -30,7 +30,7 @@ falls back to the default scope. Temporary send scope state is restored after us
 
 - M1 PlatformIO build: SUCCESS; ARM GCC 14.2.1.
 - RAM: 160136 / 235520 bytes (68.0%).
-- Flash: 413572 / 712704 bytes (58.0%).
+- Flash: 414052 / 712704 bytes (58.1%).
 - 46 upstream native tests passed: serialization, mesh tables, routing, UTF-8, hex.
 - `python3 tools/m1_listener_host_tests.py`: passed with address/undefined sanitizers.
 - `python3 tools/m1_keepalive_host_tests.py`: passed with address/undefined sanitizers.
@@ -61,3 +61,7 @@ It is an application firmware fallback, not a device settings/identity readback.
 ## 1.1.1: preserve the M1 screen during idle
 
 For THINKNODE_M1 only, turnOff powers down the EPD without clearing its image or deep-sleeping the controller. Controller RAM and CRC history are retained for subsequent partial updates. Other targets retain upstream sleep behavior. This fixes the blank screen introduced by upstream 1.18 clearing the panel on idle.
+
+## 1.1.2: refresh on incoming messages
+
+An incoming direct or channel text message wakes an idle E-ink display even when the app is connected over BLE. The current page remains selected, its contents/unread count are refreshed, and the normal idle timer powers the panel down again while preserving the image. OLED behavior is unchanged.

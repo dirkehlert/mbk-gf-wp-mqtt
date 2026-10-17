@@ -95,3 +95,66 @@ with tempfile.TemporaryDirectory() as d:
     subprocess.run(['clang++','-std=c++17','-fsanitize=address,undefined',str(source),'-o',str(binary)],check=True)
     subprocess.run([str(binary)],check=True)
 print('PASS: M1 listener bridge (reply metadata, CLI filtering, queue reset, long mentions)')
+
+# Exercise the actual newMsg method, including idle display wake policy.
+wake_fixture = r'''
+#include <cstddef>
+#include <cassert>
+#include <cstdint>
+constexpr unsigned long AUTO_OFF_MILLIS=15000;
+unsigned long millis() {return 1000;}
+struct UIScreen {};
+struct MsgPreviewScreen : UIScreen {
+  int count=0;
+  void addPreview(uint8_t,const char*,const uint8_t*,uint8_t,const char*,const char*,const char*) {count++;}
+};
+struct Display {
+  bool on=false,eink=true;
+  int wakes=0;
+  bool isOn() {return on;}
+  bool isEink() {return eink;}
+  void turnOn() {on=true;wakes++;}
+};
+class UITask {
+public:
+  int _msgcount=0,screen_changes=0;
+  bool connected=true;
+  unsigned long _auto_off=0,_next_refresh=0;
+  Display* _display=nullptr;
+  UIScreen* curr=nullptr;
+  MsgPreviewScreen* msg_preview=nullptr;
+  bool hasConnection() {return connected;}
+  void setCurrScreen(UIScreen* s) {curr=s;screen_changes++;}
+  void newMsg(uint8_t,const char*,const uint8_t*,uint8_t,const char*,const char*,const char*,int);
+};
+'''
+wake_cases = r'''
+int main() {
+  UITask ui;Display display;MsgPreviewScreen preview;UIScreen current;
+  ui._display=&display;ui.msg_preview=&preview;ui.curr=&current;
+  // A sleeping E-ink panel wakes with BLE connected and retains the current page.
+  ui.newMsg(3,"Alice",nullptr,7,"Alice","#de-mitte","hello",4);
+  assert(display.on && display.wakes==1 && ui.curr==&current && ui.screen_changes==0);
+  assert(preview.count==1 && ui._msgcount==4 && ui._auto_off==16000 && ui._next_refresh==100);
+  // Already-active panels extend the timeout without another power-on.
+  ui.newMsg(3,"Alice",nullptr,7,"Alice","#de-mitte","next",5);
+  assert(display.wakes==1 && preview.count==2);
+  // Connected OLEDs preserve their existing idle behavior.
+  display.on=false;display.eink=false;
+  ui.newMsg(3,"Alice",nullptr,7,"Alice","#de-mitte","OLED",6);
+  assert(!display.on && display.wakes==1);
+  ui.connected=false;
+  ui.newMsg(3,"Alice",nullptr,7,"Alice","#de-mitte","offline",7);
+  assert(display.on && display.wakes==2);
+  // When already viewing messages, refresh the existing preview screen.
+  ui.curr=&preview;
+  ui.newMsg(3,"Alice",nullptr,7,"Alice","#de-mitte","preview",8);
+  assert(ui.curr==&preview && ui.screen_changes==1);
+}
+'''
+with tempfile.TemporaryDirectory() as d:
+    source=Path(d)/'wake.cpp';binary=Path(d)/'wake'
+    source.write_text(wake_fixture + method('newMsg') + wake_cases)
+    subprocess.run(['clang++','-std=c++17','-fsanitize=address,undefined',str(source),'-o',str(binary)],check=True)
+    subprocess.run([str(binary)],check=True)
+print('PASS: incoming message wakes idle E-ink with BLE connected; current page and OLED policy preserved')

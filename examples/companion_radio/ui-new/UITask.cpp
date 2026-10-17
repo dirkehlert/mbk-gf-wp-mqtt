@@ -2064,7 +2064,8 @@ void UITask::newMsg(uint8_t path_len, const char* from_name, const uint8_t* from
   }
 
   if (_display != NULL) {
-    if (!_display->isOn() && !hasConnection()) {
+    // E-ink should reflect incoming messages even while the app is connected.
+    if (!_display->isOn() && (_display->isEink() || !hasConnection())) {
       _display->turnOn();
     }
     if (_display->isOn()) {
