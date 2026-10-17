@@ -230,6 +230,9 @@ void GxEPDDisplay::endFrame() {
     // Synchronise both controller RAM planes to the white intermediate frame.
     display.epd2.writeScreenBuffer(0xFF);
     display.epd2.refresh(true);
+    // Keep the old-image plane for a second black-to-white erase pulse. Bold
+    // glyphs still leave visible residue with a single pulse on this M1 panel.
+    display.epd2.refresh(true);
     display.epd2.writeScreenBufferAgain(0xFF);
 #endif
     display.display(true);

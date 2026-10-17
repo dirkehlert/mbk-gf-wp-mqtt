@@ -1,6 +1,6 @@
 # Moorbock M1 Fieldmonitor on MeshCore Companion 1.18.0
 
-Fieldtest version: 1.1.6; client identifier: `MBK FT1.1.6 v1.18` (17 characters).
+Fieldtest version: 1.1.7; client identifier: `MBK FT1.1.7 v1.18` (17 characters).
 
 Port prepared on 2026-10-17. Target: `ThinkNode_M1_companion_radio_ble`.
 
@@ -79,3 +79,6 @@ Hardware tests rejected the 1.1.3/1.1.4 full refresh changes (pale/blank display
 
 ## 1.1.6: intermediate differential erase
 1.1.5 hardware photo confirms one-line path layout, but strong previous-frame residue on path, noise, MSG and SNR. For changed M1 frames, write white to current controller RAM and refresh differentially, synchronise both controller planes to white, then display the already rendered frame differentially. No controller reset or added full refresh. MCU framebuffer remains intact. Unchanged frames and idle remain untouched. A brief white intermediate image is expected; panel outcome requires hardware verification.
+
+## 1.1.7: repeat erase pulse before history synchronisation
+Hardware feedback for 1.1.6: path improved, but old and new MSG digits still overlap. Test a second differential white erase while keeping the previous-image plane unchanged, then synchronise white and draw new content. This reinforces the same erase transition instead of a white-to-white update. No added full refresh or reset; one additional partial cycle per changed frame increases display update latency. Physical contrast/erase efficacy remains unverified until user feedback.

@@ -20,7 +20,13 @@ struct Panel {
  int inits=0,cleans=0,syncs=0;uint8_t current=0xFF,previous=0xFF,visible=0xFF;
  void init(int,bool,int,bool){inits++;}
  void writeScreenBuffer(uint8_t value){current=value;}
- void refresh(bool part){assert(part);assert(previous==visible);visible=current;cleans++;}
+ uint8_t erase_previous=0xFF;
+ void refresh(bool part){
+ assert(part && current==0xFF);
+ if(cleans%2==0){assert(previous==visible);erase_previous=previous;}
+ else {assert(visible==0xFF && previous==erase_previous);}
+ visible=current;cleans++;
+ }
  void writeScreenBufferAgain(uint8_t value){current=previous=value;syncs++;}
  } epd2;
  uint8_t buffer=0xFF;
@@ -31,7 +37,7 @@ struct Panel {
  void clearScreen(int) {erases++;full++;} void writeScreenBuffer(int) {erases++;}
  void display(bool part) {
  assert(epd2.visible==0xFF && epd2.previous==0xFF);
- assert(epd2.cleans==partial+1 && epd2.syncs==partial+1);
+ assert(epd2.cleans==2*(partial+1) && epd2.syncs==partial+1);
  if(part)partial++;else full++;
  epd2.current=epd2.previous=epd2.visible=buffer;
  }
@@ -72,4 +78,4 @@ with tempfile.TemporaryDirectory() as d:
  f.write_text(header[s:e]+fixture+'\n'.join(method(n) for n in ['turnOn','turnOff','startFrame','endFrame'])+cases)
  subprocess.run(['clang++','-std=c++17','-DTHINKNODE_M1=1','-fsanitize=address,undefined',str(f),'-o',str(binary)],check=True)
  subprocess.run([str(binary)],check=True)
-print('PASS: partial white erase -> history sync -> buffered frame; 30 changes retain new pixels; unchanged/idle skip erase; no reset/full refresh')
+print('PASS: two white erase pulses retain old history -> history sync -> buffered frame; 30 changes retain new pixels; unchanged/idle skip erase; no reset/full refresh')
