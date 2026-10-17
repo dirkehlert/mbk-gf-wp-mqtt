@@ -41,19 +41,17 @@ public:
 '''
 cases=r'''
 int main(){
- GxEPDDisplay d;assert(d.max_partial_refresh==10);
+ GxEPDDisplay d;assert(d.max_partial_refresh==-1);
  d.forceFullRefresh();d.startFrame(1);assert(d.display.erases==0);d.endFrame();
- assert(d.display.full==1 && d.display.partial==0 && d._cycles_before_full_refresh==10);
- // Repainting identical data does not drive the panel or exhaust the budget.
- d.startFrame(1);d.endFrame();assert(d.display.full==1 && d.display.partial==0);
- for(int i=0;i<10;i++){d.display_crc.value++;d.startFrame(1);d.endFrame();}
- assert(d.display.partial==10 && d._cycles_before_full_refresh==0);
- // A required cleaning refresh must happen even with an identical CRC.
- d.startFrame(1);d.endFrame();assert(d.display.full==2 && d._cycles_before_full_refresh==10);
+ assert(d.display.full==1 && d.display.partial==0 && d._cycles_before_full_refresh==-1);
+ d.startFrame(1);d.endFrame();assert(d.display.full==1);
+ for(int i=0;i<30;i++){d.display_crc.value++;d.startFrame(1);d.endFrame();}
+ assert(d.display.full==31 && d.display.partial==0 && d.display.erases==0);
  d.turnOff();assert(!d._isOn && d.display.erases==0 && d.display.poweroffs==1);
- d.endFrame();assert(d.display.full==2);
+ d.endFrame();assert(d.display.full==31);
  d.turnOn();assert(d._isOn && d._cycles_before_full_refresh==0);
- d.startFrame(1);d.endFrame();assert(d.display.full==3 && d.display.erases==0);
+ d.startFrame(1);d.endFrame();assert(d.display.full==32 && d.display.partial==0);
+ d.startFrame(1);d.endFrame();assert(d.display.full==32);
 }
 '''
 with tempfile.TemporaryDirectory() as d:
@@ -61,4 +59,4 @@ with tempfile.TemporaryDirectory() as d:
  f.write_text(header[s:e]+fixture+'\n'.join(method(n) for n in ['turnOn','turnOff','startFrame','endFrame'])+cases)
  subprocess.run(['clang++','-std=c++17','-DTHINKNODE_M1=1','-fsanitize=address,undefined',str(f),'-o',str(binary)],check=True)
  subprocess.run([str(binary)],check=True)
-print('PASS: M1 full/partial budget, unchanged CRC, sleep retention, forced wake refresh and no premature physical clear')
+print('PASS: changed frames full-only; unchanged frames skip; idle retains; same-CRC wake refresh; no intermediate clears')

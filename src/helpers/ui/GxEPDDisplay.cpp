@@ -233,11 +233,11 @@ void GxEPDDisplay::endFrame() {
   if (_isOn == false) return;
   uint32_t crc = display_crc.finalize();
 #if defined(THINKNODE_M1)
-  bool full_refresh = _cycles_before_full_refresh == 0;
-  if (full_refresh || crc != last_display_crc_value) {
-    display.display(!full_refresh);
-    if (full_refresh) resetPartialRefreshCounter();
-    else if (_cycles_before_full_refresh > 0) _cycles_before_full_refresh--;
+  // This M1 retains strong contrast with full updates but fades on partials.
+  // Skip identical content unless startup/wake explicitly requests a refresh.
+  if (_cycles_before_full_refresh == 0 || crc != last_display_crc_value) {
+    display.display(false);
+    resetPartialRefreshCounter();
   }
 #else
   if (crc != last_display_crc_value) {
