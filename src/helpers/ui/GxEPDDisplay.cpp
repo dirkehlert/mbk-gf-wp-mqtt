@@ -114,6 +114,15 @@ void GxEPDDisplay::print(const char* str) {
   display.print(str);
 }
 
+void GxEPDDisplay::printWordWrap(const char* str, int max_width) {
+  // Message and reply views use the full display width. Enable GFX wrapping
+  // only for their text, then restore single-line measurement for status/path.
+  display_crc.update<int>(max_width);
+  display.setTextWrap(true);
+  print(str);
+  display.setTextWrap(false);
+}
+
 void GxEPDDisplay::fillRect(int x, int y, int w, int h) {
   display_crc.update<int>(x);
   display_crc.update<int>(y);

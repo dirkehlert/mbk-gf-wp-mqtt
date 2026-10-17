@@ -28,32 +28,36 @@ class Adafruit_GFX {
 public:
  const GFXfont* gfxFont=&FreeSans9pt7b;
  uint8_t textsize_x=1,textsize_y=1;int16_t _width=200;bool wrap=true;
+ void setTextWrap(bool value){wrap=value;}
  void charBounds(unsigned char,int16_t*,int16_t*,int16_t*,int16_t*,int16_t*,int16_t*);
  void getTextBounds(const char*,int16_t,int16_t,int16_t*,int16_t*,uint16_t*,uint16_t*);
 };
 '''
-source=source.replace('#include "Fonts/FreeSans9pt7b.h"', (lib/'Fonts/FreeSans9pt7b.h').read_text().replace('#include <Adafruit_GFX.h>', ''))
+source=source.replace('#include "Fonts/FreeSans9pt7b.h"', (lib/'Fonts/FreeSans9pt7b.h').read_text().replace('#include <Adafruit_GFX.h>', '').replace('#pragma once', ''))
 source+=methods+r'''
 class Driver:public DisplayDriver {
 public:
- Adafruit_GFX panel;std::string printed;
+ Adafruit_GFX display;std::string printed;uint16_t printed_height=0;
+ struct CRC{template<class T>void update(T){}}display_crc;
+ void printWordWrap(const char*,int);
  Driver():DisplayDriver(128,128){}
  bool isOn(){return true;}void turnOn(){}void turnOff(){}void clear(){}
  void startFrame(ColorVal){}void endFrame(){}void setTextSize(int){}
  void setColor(ColorVal){}void setCursor(int,int){}
- void print(const char* s){printed=s;}
+ void print(const char* s){printed=s;int16_t x,y;uint16_t w;display.getTextBounds(s,0,0,&x,&y,&w,&printed_height);}
  void fillRect(int,int,int,int){}void drawRect(int,int,int,int){}
  void drawXbm(int,int,const uint8_t*,int,int){}
  uint16_t getTextWidth(const char* s){
-  int16_t x,y;uint16_t w,h;panel.getTextBounds(s,0,0,&x,&y,&w,&h);
+  int16_t x,y;uint16_t w,h;display.getTextBounds(s,0,0,&x,&y,&w,&h);
   return ceil((w+1)/1.5625f);
  }
 };
+void Driver::printWordWrap(const char* str, int max_width) PLACEHOLDER
 int main(){
  Driver d;std::string path="0s 8 1A2B3C4D5E6F778899AABBCCDDEEFF00";
  // Reproduce the bug: wrapped bounds hide the true length from ellipsis.
  d.drawTextEllipsized(0,100,128,path.c_str());assert(d.printed==path);
- d.panel.wrap=false;
+ d.display.wrap=false;
  assert(d.getTextWidth(path.c_str())>128);
  d.drawTextEllipsized(0,100,128,path.c_str());
  assert(d.printed!=path && d.printed.find("...")!=std::string::npos);
@@ -70,8 +74,11 @@ int main(){
 }
 '''
 assert 'display.setTextWrap(false);' in (root/'src/helpers/ui/GxEPDDisplay.cpp').read_text()
+body=extract((root/'src/helpers/ui/GxEPDDisplay.cpp').read_text(),'void GxEPDDisplay::printWordWrap')
+source=source.replace('void Driver::printWordWrap(const char* str, int max_width) PLACEHOLDER',body.replace('GxEPDDisplay::','Driver::'))
+source=source.replace('for(const char* short_path:', 'd.printWordWrap(path.c_str(),128);assert(d.printed==path && d.printed_height>22 && !d.display.wrap);\n d.printWordWrap("one\\ntwo",128);assert(d.printed_height>22 && !d.display.wrap);\n d.drawTextEllipsized(0,100,128,path.c_str());assert(d.getTextWidth(d.printed.c_str())<=128);\n for(const char* short_path:')
 with tempfile.TemporaryDirectory() as tmp:
  p=Path(tmp);(p/'test.cpp').write_text(source)
  subprocess.run(['clang++','-std=c++17','-fsanitize=address,undefined','-I'+str(lib),'-I'+str(root/'src/helpers/ui'),str(p/'test.cpp'),'-o',str(p/'test')],check=True)
  subprocess.run([str(p/'test')],check=True)
-print('PASS: reproduced wrapped path bug; real GFX font/bounds truncate long paths; short paths retained; 69 lengths fit one line')
+print('PASS: real GFX message/newline wrap enabled only for body; path ellipsis stays single-line; 69 path lengths fit')

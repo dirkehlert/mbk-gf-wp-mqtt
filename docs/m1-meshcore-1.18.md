@@ -1,6 +1,6 @@
 # Moorbock M1 Fieldmonitor on MeshCore Companion 1.18.0
 
-Fieldtest version: 1.1.11; client identifier: `MBK FT1.1.11 v1.18` (18 characters).
+Fieldtest version: 1.1.12; client identifier: `MBK FT1.1.12 v1.18` (18 characters).
 
 Port prepared on 2026-10-17. Target: `ThinkNode_M1_companion_radio_ble`.
 
@@ -98,3 +98,6 @@ Hardware photo rejects 1.1.9 full-only contrast. The standard GxEPD2 1.6.2 D67 d
 User confirms original archived 1.17 fallback is much better after flashing it for comparison. Restore GxEPDDisplay.h/.cpp from original commit ba37dc08409beb34862de82b1e2c3108350e8639, with only automatic text wrapping disabled for correct path ellipsis. Thus startup, original 150_BN driver, refresh mode, and idle behavior match the original source: no panel powerOff on idle, no full-refresh scheduling, no custom driver. Remove isolated reference driver and its test. Existing MeshCore 1.18 port and message-wake behavior retained. The restore is evidence-driven but still needs hardware confirmation under 1.18. Residual ghosting is not claimed solved.
 
 Hardwarebestätigung am 17.10.2026: Nutzer bestätigt 1.1.11 nach Empfang und Ruhemodus mit „ja, ist ok so“. Originale Display-Ansteuerung aus 1.17 unter MeshCore 1.18 akzeptiert.
+
+## 1.1.12: scoped message line wrapping
+Override GxEPDDisplay::printWordWrap so the full-width message and reply body calls enable native GFX line wrapping only while printing that body. Restore wrap=false immediately afterwards so status/path ellipsis still measures single lines. Existing explicit newlines are respected; native GFX wraps long words at a glyph boundary. No changes to the accepted 1.1.11 display refresh, startup or idle behavior. max_width contributes to frame CRC; current UI call sites both pass full display width (narrow text columns are not introduced).
