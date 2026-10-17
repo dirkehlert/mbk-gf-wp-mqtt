@@ -14,10 +14,6 @@
   SPIClass SPI1 = SPIClass(FSPI);
 #endif
 
-#ifndef EPD_WASHING_MACHINE_CYCLES
-  #define EPD_WASHING_MACHINE_CYCLES 0
-#endif
-
 // Color scheme
 ColorVal UIColor::window_bkg = GxEPD_WHITE;
 ColorVal UIColor::title_bkg = GxEPD_WHITE;
@@ -29,6 +25,7 @@ ColorVal UIColor::popup_bkg = GxEPD_WHITE;
 ColorVal UIColor::popup_txt = GxEPD_BLACK;
 ColorVal UIColor::corp_blue = GxEPD_BLACK;
 
+
 bool GxEPDDisplay::begin() {
   display.epd2.selectSPI(SPI1, SPISettings(4000000, MSBFIRST, SPI_MODE0));
 #ifdef ESP32
@@ -38,32 +35,17 @@ bool GxEPDDisplay::begin() {
 #endif
   display.init(115200, true, 2, false);
   display.setRotation(DISPLAY_ROTATION);
-  display.setTextWrap(false);  // measure full lines so ellipsis can truncate paths
+  display.setTextWrap(false);  // keep path measurement single-line for ellipsis
   setTextSize(1);  // Default to size 1
-
-  display.setFullWindow();
-
-  for (int i = 0; i < EPD_WASHING_MACHINE_CYCLES; i++) {
-    display.fillScreen(GxEPD_BLACK);
-    display.display(false);
-    delay(2000);
-    display.fillScreen(GxEPD_WHITE);
-    display.display(false);
-    delay(2000);
-  }
-
   display.setPartialWindow(0, 0, display.width(), display.height());
-  resetPartialRefreshCounter();
-#if defined(THINKNODE_M1)
-  forceFullRefresh();  // clear residual images from the previous session
-#endif
 
+  display.fillScreen(GxEPD_WHITE);
+  display.display(true);
   #if DISP_BACKLIGHT
   digitalWrite(DISP_BACKLIGHT, LOW);
   pinMode(DISP_BACKLIGHT, OUTPUT);
   #endif
   _init = true;
-  _isOn = true;
   return true;
 }
 
@@ -74,12 +56,7 @@ void GxEPDDisplay::turnOn() {
 #elif defined(EXP_PIN_BACKLIGHT) && !defined(BACKLIGHT_BTN)
   expander.digitalWrite(EXP_PIN_BACKLIGHT, HIGH);
 #endif
-  if (!_isOn) {
-#if defined(THINKNODE_M1)
-    forceFullRefresh();  // resynchronise the panel after idle power-off
-#endif
-    _isOn = true;
-  }
+  _isOn = true;
 }
 
 void GxEPDDisplay::turnOff() {
@@ -89,19 +66,6 @@ void GxEPDDisplay::turnOff() {
   expander.digitalWrite(EXP_PIN_BACKLIGHT, LOW);
 #endif
   _isOn = false;
-#if defined(THINKNODE_M1)
-  // E-ink retains its last image without power. Keep the controller RAM and
-  // refresh history intact so the next update can resume after power-on.
-  display.powerOff();
-#else
-  // do full refresh before powering off to clear screen
-  // no full refresh needed at wakeup
-  display.clearScreen(0xFF); // Clears microcontroller side RAM
-  display.writeScreenBuffer(0xFF); // Forces 0xFF (White) into the display controller's history registers
-  resetPartialRefreshCounter();
-  last_display_crc_value=0;
-  display.hibernate();
-#endif
 }
 
 void GxEPDDisplay::clear() {
@@ -114,21 +78,6 @@ void GxEPDDisplay::startFrame(ColorVal bkg) {
   display.fillScreen(bkg);
   display.setTextColor(_curr_color = UIColor::primary_txt);
   display_crc.reset();
-#if defined(THINKNODE_M1)
-  // Render the complete new frame before doing any panel refresh.
-  display.setFullWindow();
-#else
-  if (_cycles_before_full_refresh != 0) {
-    display.setPartialWindow(0, 0, display.width(), display.height());
-  } else {
-    // forces a full wipe of the screen ...
-    display.clearScreen(0xFF); // Clears microcontroller side RAM
-    display.writeScreenBuffer(0xFF); // Forces 0xFF (White) into the display controller's history registers
-    // we'll need a partial refresh after that (whatever crc value is)
-    last_display_crc_value = 0;
-    resetPartialRefreshCounter();
-  }
-#endif
 }
 
 void GxEPDDisplay::setTextSize(int sz) {
@@ -230,22 +179,9 @@ uint16_t GxEPDDisplay::getTextWidth(const char* str) {
 }
 
 void GxEPDDisplay::endFrame() {
-  if (_isOn == false) return;
   uint32_t crc = display_crc.finalize();
-#if defined(THINKNODE_M1)
-  // This M1 retains strong contrast with full updates but fades on partials.
-  // Skip identical content unless startup/wake explicitly requests a refresh.
-  if (_cycles_before_full_refresh == 0 || crc != last_display_crc_value) {
-    display.display(false);
-    resetPartialRefreshCounter();
-  }
-#else
   if (crc != last_display_crc_value) {
     display.display(true);
-    if (_cycles_before_full_refresh > 0) {
-      _cycles_before_full_refresh--;
-    }
+    last_display_crc_value = crc;
   }
-#endif
-  last_display_crc_value = crc;
 }

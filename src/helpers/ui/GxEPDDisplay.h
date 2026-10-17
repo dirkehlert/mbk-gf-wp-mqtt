@@ -6,9 +6,6 @@
 #define ENABLE_GxEPD2_GFX 0
 
 #include <GxEPD2_BW.h>
-#if defined(THINKNODE_M1)
-#include <ThinkNodeM1EPD.h>
-#endif
 #include <GxEPD2_3C.h>
 #include <GxEPD2_4C.h>
 #include <GxEPD2_7C.h>
@@ -19,16 +16,6 @@
 
 #include "DisplayDriver.h"
 
-#ifndef EINK_MAX_PARTIAL_REFRESH
-  // 60 to prevent ghosting when refreshing every minute ...
-  // set to -1 to disable the counter
-  #if defined(THINKNODE_M1)
-    #define EINK_MAX_PARTIAL_REFRESH -1
-  #else
-    #define EINK_MAX_PARTIAL_REFRESH -1
-  #endif
-#endif
-
 class GxEPDDisplay : public DisplayDriver {
 
 #if defined(EINK_DISPLAY_MODEL)
@@ -38,12 +25,7 @@ class GxEPDDisplay : public DisplayDriver {
   const float offset_x = EINK_X_OFFSET;
   const float offset_y = EINK_Y_OFFSET;
 #else
-#if defined(THINKNODE_M1)
-  // ThinkNode M1 uses GDEH0154D67/SSD1681; do not load the 150_BN LUT.
-  GxEPD2_BW<ThinkNodeM1EPD, ThinkNodeM1EPD::HEIGHT> display;
-#else
   GxEPD2_BW<GxEPD2_150_BN, 200> display;
-#endif
   const float scale_x  = 1.5625f;
   const float scale_y  = 1.5625f;
   const float offset_x = 0;
@@ -54,14 +36,10 @@ class GxEPDDisplay : public DisplayDriver {
   uint16_t _curr_color;
   CRC32 display_crc;
   int last_display_crc_value = 0;
-  int _cycles_before_full_refresh;
-  int max_partial_refresh = EINK_MAX_PARTIAL_REFRESH; // so this can be changed by an option after
 
 public:
 #if defined(EINK_DISPLAY_MODEL)
   GxEPDDisplay() : DisplayDriver(128, 128), display(EINK_DISPLAY_MODEL(PIN_DISPLAY_CS, PIN_DISPLAY_DC, PIN_DISPLAY_RST, PIN_DISPLAY_BUSY)) {}
-#elif defined(THINKNODE_M1)
-  GxEPDDisplay() : DisplayDriver(128, 128), display(ThinkNodeM1EPD(DISP_CS, DISP_DC, DISP_RST, DISP_BUSY)) {}
 #else
   GxEPDDisplay() : DisplayDriver(128, 128), display(GxEPD2_150_BN(DISP_CS, DISP_DC, DISP_RST, DISP_BUSY)) {}
 #endif
@@ -70,8 +48,6 @@ public:
 
   bool isOn() override { return _isOn; }
   bool isEink() override { return true; }
-  void forceFullRefresh() override { _cycles_before_full_refresh = 0; };
-  void resetPartialRefreshCounter() { _cycles_before_full_refresh = max_partial_refresh; };
   void turnOn() override;
   void turnOff() override;
   void clear() override;

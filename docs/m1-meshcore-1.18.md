@@ -1,6 +1,6 @@
 # Moorbock M1 Fieldmonitor on MeshCore Companion 1.18.0
 
-Fieldtest version: 1.1.10; client identifier: `MBK FT1.1.10 v1.18` (18 characters).
+Fieldtest version: 1.1.11; client identifier: `MBK FT1.1.11 v1.18` (18 characters).
 
 Port prepared on 2026-10-17. Target: `ThinkNode_M1_companion_radio_ble`.
 
@@ -93,3 +93,6 @@ Hardware feedback for 1.1.8: splash disappears cleanly; first home image has str
 
 ## 1.1.10: pinned Meshtastic D67 implementation
 Hardware photo rejects 1.1.9 full-only contrast. The standard GxEPD2 1.6.2 D67 driver differs materially from Meshtastic's pinned M1 D67 driver: post-refresh writes target both planes in standard vs current plane only in fork; fork explicitly initialises/powers on before refresh and uses 0xf4 for full update then separate powerOff, standard uses 0xf7 with integrated power-off. Import the pinned reference as a separate local ThinkNodeM1EPD library; preserve license and command sequencing. Adapt only constructor/SPI API, class names, include, and WIDTH_VISIBLE. Keep full-only policy from 1.1.9 to isolate driver behavior; changed frames flash and block the loop during hardware update. Panel contrast still requires user confirmation; source/register tests cannot prove image quality.
+
+## 1.1.11: restore original 1.17 display implementation
+User confirms original archived 1.17 fallback is much better after flashing it for comparison. Restore GxEPDDisplay.h/.cpp from original commit ba37dc08409beb34862de82b1e2c3108350e8639, with only automatic text wrapping disabled for correct path ellipsis. Thus startup, original 150_BN driver, refresh mode, and idle behavior match the original source: no panel powerOff on idle, no full-refresh scheduling, no custom driver. Remove isolated reference driver and its test. Existing MeshCore 1.18 port and message-wake behavior retained. The restore is evidence-driven but still needs hardware confirmation under 1.18. Residual ghosting is not claimed solved.

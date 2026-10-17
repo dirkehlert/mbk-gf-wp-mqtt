@@ -8,8 +8,6 @@ def method(name):
  s=text.index('void GxEPDDisplay::'+name+'(');i=text.index('{',s)+1;depth=1
  while depth:depth+=(text[i]=='{')-(text[i]=='}');i+=1
  return text[s:i]
-header=(root/'src/helpers/ui/GxEPDDisplay.h').read_text()
-s=header.index('#ifndef EINK_MAX_PARTIAL_REFRESH');e=header.index('class GxEPDDisplay',s)
 fixture=r'''
 #include <cassert>
 #include <cstdint>
@@ -31,32 +29,25 @@ public:
  bool _isOn=true,_init=true;
  ColorVal _curr_color=0;
  int last_display_crc_value=0;
- int max_partial_refresh=EINK_MAX_PARTIAL_REFRESH;
- int _cycles_before_full_refresh=EINK_MAX_PARTIAL_REFRESH;
- void resetPartialRefreshCounter(){_cycles_before_full_refresh=max_partial_refresh;}
- void forceFullRefresh(){_cycles_before_full_refresh=0;}
- void begin(){_init=true;_isOn=true;forceFullRefresh();}
+ void begin(){_init=true;}
  void turnOn();void turnOff();void startFrame(ColorVal);void endFrame();
 };
 '''
 cases=r'''
 int main(){
- GxEPDDisplay d;assert(d.max_partial_refresh==-1);
- d.forceFullRefresh();d.startFrame(1);assert(d.display.erases==0);d.endFrame();
- assert(d.display.full==1 && d.display.partial==0 && d._cycles_before_full_refresh==-1);
- d.startFrame(1);d.endFrame();assert(d.display.full==1);
+ GxEPDDisplay d;
+ d.startFrame(1);d.endFrame();assert(d.display.partial==1 && d.display.full==0);
+ d.startFrame(1);d.endFrame();assert(d.display.partial==1);
  for(int i=0;i<30;i++){d.display_crc.value++;d.startFrame(1);d.endFrame();}
- assert(d.display.full==31 && d.display.partial==0 && d.display.erases==0);
- d.turnOff();assert(!d._isOn && d.display.erases==0 && d.display.poweroffs==1);
- d.endFrame();assert(d.display.full==31);
- d.turnOn();assert(d._isOn && d._cycles_before_full_refresh==0);
- d.startFrame(1);d.endFrame();assert(d.display.full==32 && d.display.partial==0);
- d.startFrame(1);d.endFrame();assert(d.display.full==32);
+ assert(d.display.partial==31 && d.display.full==0 && d.display.erases==0);
+ d.turnOff();assert(!d._isOn && d.display.erases==0 && d.display.poweroffs==0);
+ d.turnOn();assert(d._isOn);d.display_crc.value++;d.startFrame(1);d.endFrame();
+ assert(d.display.partial==32 && d.display.poweroffs==0 && d.display.erases==0);
 }
 '''
 with tempfile.TemporaryDirectory() as d:
  p=Path(d);f=p/'test.cpp';binary=p/'test'
- f.write_text(header[s:e]+fixture+'\n'.join(method(n) for n in ['turnOn','turnOff','startFrame','endFrame'])+cases)
+ f.write_text(fixture+'\n'.join(method(n) for n in ['turnOn','turnOff','startFrame','endFrame'])+cases)
  subprocess.run(['clang++','-std=c++17','-DTHINKNODE_M1=1','-fsanitize=address,undefined',str(f),'-o',str(binary)],check=True)
  subprocess.run([str(binary)],check=True)
-print('PASS: changed frames full-only; unchanged frames skip; idle retains; same-CRC wake refresh; no intermediate clears')
+print('PASS: restored original partial refresh and unchanged CRC skip; idle/wake never clear or power down panel')
