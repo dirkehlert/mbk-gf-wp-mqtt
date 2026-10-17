@@ -2,17 +2,16 @@
 
 #include <Arduino.h>
 #include <Mesh.h>
-#include "AbstractUITask.h"
 
 /*------------ Frame Protocol --------------*/
-#define FIRMWARE_VER_CODE 13
+#define FIRMWARE_VER_CODE 14
 
 #ifndef FIRMWARE_BUILD_DATE
-#define FIRMWARE_BUILD_DATE "9 Aug 2026"
+#define FIRMWARE_BUILD_DATE "15 Oct 2026"
 #endif
 
 #ifndef STOCK_FIRMWARE_VERSION
-#define STOCK_FIRMWARE_VERSION "v1.17.0"
+#define STOCK_FIRMWARE_VERSION "v1.18.0"
 #endif
 
 #ifndef FIRMWARE_VERSION
@@ -20,7 +19,7 @@
 #endif
 
 #ifndef CLIENT_FIRMWARE_VERSION
-#define CLIENT_FIRMWARE_VERSION "Moorbock FT1 v1.17"
+#define CLIENT_FIRMWARE_VERSION "Moorbock FT1 v1.18"
 #endif
 
 #ifndef DISPLAY_FIRMWARE_VERSION
@@ -87,6 +86,10 @@
 #define REQ_TYPE_GET_STATUS             0x01 // same as _GET_STATS
 #define REQ_TYPE_KEEP_ALIVE             0x02
 #define REQ_TYPE_GET_TELEMETRY_DATA     0x03
+
+// Copied from simple_repeater
+#define CTL_TYPE_NODE_DISCOVER_REQ      0x80
+#define CTL_TYPE_NODE_DISCOVER_RESP     0x90
 
 struct AdvertPath {
   uint8_t pubkey_prefix[7];
@@ -216,14 +219,35 @@ struct KeepaliveInfo {
 
 class MyMesh : public BaseChatMesh, public DataStoreHost {
 public:
-  MyMesh(mesh::Radio &radio, mesh::RNG &rng, mesh::RTCClock &rtc, SimpleMeshTables &tables, DataStore& store, AbstractUITask* ui=NULL);
+  class Listener {
+    public:
+      virtual void onMessageRecv(mesh::Packet *pkt, const ContactInfo &from, uint8_t txt_type, uint32_t sender_timestamp, const char* text) = 0;
+      virtual void onChannelMessageRecv(mesh::Packet *pkt, ChannelDetails& channel_details, const char* text) = 0;
+      virtual void onQueueSizeChanged(int msgcount) = 0;
+      virtual void onDiscoveredContact(ContactInfo &contact, bool is_new, uint8_t path_len, const uint8_t* path) { }
+      virtual void onControlDataRecv(const mesh::Packet* pkt) { }
+      virtual void onChannelDataRecv(mesh::Packet *pkt, const mesh::GroupChannel &channel, uint16_t data_type,
+                                     const uint8_t *data, size_t data_len) { }
+      virtual void onACKRecv(uint32_t ack_crc) { }
+      virtual uint8_t onUnhandledRequest(const ContactInfo &contact, uint32_t sender_timestamp, const uint8_t *data,
+                                         uint8_t len, uint8_t *reply) { return 0; /* unknown request type */ }
+      virtual bool onUnhandledResponse(const ContactInfo &from, uint32_t tag, const uint8_t* data, uint8_t len) { return false; /* not handled */ }
+      virtual void onTraceRecv(mesh::Packet *pkt, uint32_t tag, uint32_t auth_code, uint8_t flags,
+                               const uint8_t *path_snrs, const uint8_t *path_hashes, uint8_t path_len) { }
+      virtual void onRawDataRecv(mesh::Packet *pkt) { }
+      virtual ~Listener() { }
+  };
 
-  void begin(bool has_display);
+  MyMesh(mesh::Radio &radio, mesh::RNG &rng, mesh::RTCClock &rtc, SimpleMeshTables &tables, DataStore& store);
+
+  void begin();
   void startInterface(BaseSerialInterface &serial);
+  void setListener(Listener* listener) { _listener = listener; }
 
   const char *getNodeName();
   NodePrefs *getNodePrefs();
   uint32_t getBLEPin();
+  void setBLEPin(uint32_t active_pin);
 
   void loop();
   void handleCmdFrame(size_t len);
@@ -257,6 +281,8 @@ public:
   void resetMonitorLiveStats();
   uint8_t queryNearbyScopes();
   uint8_t getScopeInfo(ScopeInfo dest[], uint8_t max_count) const;
+  bool isDisplayableText(const char* text) const;
+  uint8_t getChannelIndex(const mesh::GroupChannel& channel) { return findChannelIdx(channel); }
   void formatPacketScope(const mesh::Packet* packet, char* dest, size_t dest_size) const;
   uint8_t getLastScopeScanSent() const { return last_scope_scan_sent; }
   uint8_t getScopeResponseCount() const { return scope_response_count; }
@@ -271,6 +297,9 @@ protected:
   float getAirtimeBudgetFactor() const override;
   int getInterferenceThreshold() const override;
   bool getCADEnabled() const override;
+  int getAGCResetInterval() const override {
+    return ((int)_prefs.agc_reset_interval) * 4000;   // milliseconds
+  }
   int calcRxDelay(float score, uint32_t air_time) const override;
   uint32_t getRetransmitDelay(const mesh::Packet *packet) override;
   uint32_t getDirectRetransmitDelay(const mesh::Packet *packet) override;
@@ -306,6 +335,8 @@ protected:
                      const char *text) override;
   void onCommandDataRecv(const ContactInfo &from, mesh::Packet *pkt, uint32_t sender_timestamp,
                          const char *text) override;
+  void onCLICommandRecv(const ContactInfo &from, mesh::Packet *pkt, uint32_t sender_timestamp,
+                         const char *text, char* reply) override;
   void onSignedMessageRecv(const ContactInfo &from, mesh::Packet *pkt, uint32_t sender_timestamp,
                            const uint8_t *sender_prefix, const char *text) override;
   void onChannelMessageRecv(const mesh::GroupChannel &channel, mesh::Packet *pkt, uint32_t timestamp,
@@ -340,6 +371,7 @@ public:
     _prefs.node_lat = sensors.node_lat;
     _prefs.node_lon = sensors.node_lon;
     _store->savePrefs(_prefs);
+    _prefs.clearDirty();
   }
 
 #if ENV_INCLUDE_GPS == 1
@@ -372,6 +404,7 @@ private:
   }
 
   void checkCLIRescueCmd();
+  bool handleCommand(const char* text, uint32_t sender_timestamp, char* reply);
   void checkSerialInterface();
   bool isValidClientRepeatFreq(uint32_t f) const;
   void resetQuickMessages();
@@ -385,7 +418,6 @@ private:
   void loadKeepalivePrefs();
   bool saveKeepalivePrefs();
   bool isMonitorHeatstripRequest(const char* text) const;
-  bool isDisplayableText(const char* text) const;
   void formatMonitorHeatstripReply(char* dest, size_t dest_size) const;
   bool sendMonitorHeatstripReply(const ContactInfo& recipient);
   bool rememberScopeName(const char* name, const char* source, bool discovered = true);
@@ -417,7 +449,7 @@ private:
   uint32_t pending_scope_req[8];
   uint32_t pending_scope_discover_tag;
   BaseSerialInterface *_serial;
-  AbstractUITask* _ui;
+  Listener* _listener;
 
   ContactsIterator _iter;
   uint32_t _iter_filter_since;
@@ -442,6 +474,7 @@ private:
   uint8_t keepalive_ack_state;
   char keepalive_last_scope[SCOPE_NAME_SIZE];
   char keepalive_last_repeater[MONITOR_LAST_HOP_TEXT_SIZE];
+  char reply_buf[166];
   uint8_t app_target_ver;
   uint8_t *sign_data;
   uint32_t sign_data_len;
