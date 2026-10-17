@@ -16,11 +16,12 @@ fixture=r'''
 using ColorVal=uint16_t;
 namespace UIColor {const ColorVal primary_txt=0;}
 struct Panel {
+ struct Controller {int inits=0;void init(int,bool,int,bool){inits++;}} epd2;
  int full=0,partial=0,erases=0,poweroffs=0;
  void fillScreen(ColorVal) {} void setTextColor(ColorVal) {}
  void setFullWindow() {} int width(){return 200;} int height(){return 200;}
  void setPartialWindow(int,int,int,int) {}
- void clearScreen(int) {erases++;} void writeScreenBuffer(int) {erases++;}
+ void clearScreen(int) {erases++;full++;} void writeScreenBuffer(int) {erases++;}
  void display(bool part) {if(part)partial++;else full++;}
  void powerOff(){poweroffs++;} void hibernate(){poweroffs++;}
 };
@@ -43,17 +44,19 @@ cases=r'''
 int main(){
  GxEPDDisplay d;assert(d.max_partial_refresh==20);
  d.forceFullRefresh();d.startFrame(1);assert(d.display.erases==0);d.endFrame();
- assert(d.display.full==1 && d.display.partial==0 && d._cycles_before_full_refresh==20);
- // Repainting identical data does not drive the panel or exhaust the budget.
- d.startFrame(1);d.endFrame();assert(d.display.full==1 && d.display.partial==0);
+ assert(d.display.full==1 && d.display.partial==1 && d.display.epd2.inits==1);
+ assert(d._cycles_before_full_refresh==20);
+ d.startFrame(1);d.endFrame();assert(d.display.full==1 && d.display.partial==1);
  for(int i=0;i<20;i++){d.display_crc.value++;d.startFrame(1);d.endFrame();}
- assert(d.display.partial==20 && d._cycles_before_full_refresh==0);
- // A required cleaning refresh must happen even with an identical CRC.
- d.startFrame(1);d.endFrame();assert(d.display.full==2 && d._cycles_before_full_refresh==20);
- d.turnOff();assert(!d._isOn && d.display.erases==0 && d.display.poweroffs==1);
+ assert(d.display.partial==21 && d._cycles_before_full_refresh==0);
+ d.startFrame(1);d.endFrame();assert(d.display.full==2 && d.display.partial==22);
+ assert(d._cycles_before_full_refresh==20 && d.display.epd2.inits==2);
+ int erases=d.display.erases;
+ d.turnOff();assert(!d._isOn && d.display.erases==erases && d.display.poweroffs==1);
  d.endFrame();assert(d.display.full==2);
  d.turnOn();assert(d._isOn && d._cycles_before_full_refresh==0);
- d.startFrame(1);d.endFrame();assert(d.display.full==3 && d.display.erases==0);
+ d.startFrame(1);assert(d.display.erases==erases);d.endFrame();
+ assert(d.display.full==3 && d.display.partial==23 && d.display.epd2.inits==3);
 }
 '''
 with tempfile.TemporaryDirectory() as d:

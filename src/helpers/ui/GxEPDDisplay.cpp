@@ -234,7 +234,15 @@ void GxEPDDisplay::endFrame() {
 #if defined(THINKNODE_M1)
   bool full_refresh = _cycles_before_full_refresh == 0;
   if (full_refresh || crc != last_display_crc_value) {
-    display.display(!full_refresh);
+    if (full_refresh) {
+      // The M1 panel can render a grey frame when switching directly from the
+      // differential LUT to a full image. Reset its controller, clean to white
+      // with a full waveform, then draw the buffered content differentially.
+      display.epd2.init(0, false, 2, false);
+      display.clearScreen(0xFF);
+      display.writeScreenBuffer(0xFF);
+    }
+    display.display(true);
     if (full_refresh) resetPartialRefreshCounter();
     else if (_cycles_before_full_refresh > 0) _cycles_before_full_refresh--;
   }

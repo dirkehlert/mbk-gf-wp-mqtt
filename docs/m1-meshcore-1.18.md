@@ -1,6 +1,6 @@
 # Moorbock M1 Fieldmonitor on MeshCore Companion 1.18.0
 
-Fieldtest version: 1.1.3; client identifier: `MBK FT1.1.3 v1.18` (17 characters).
+Fieldtest version: 1.1.4; client identifier: `MBK FT1.1.4 v1.18` (17 characters).
 
 Port prepared on 2026-10-17. Target: `ThinkNode_M1_companion_radio_ble`.
 
@@ -30,7 +30,7 @@ falls back to the default scope. Temporary send scope state is restored after us
 
 - M1 PlatformIO build: SUCCESS; ARM GCC 14.2.1.
 - RAM: 160136 / 235520 bytes (68.0%).
-- Flash: 414020 / 712704 bytes (58.1%).
+- Flash: 414052 / 712704 bytes (58.1%).
 - 46 upstream native tests passed: serialization, mesh tables, routing, UTF-8, hex.
 - `python3 tools/m1_listener_host_tests.py`: passed with address/undefined sanitizers.
 - `python3 tools/m1_keepalive_host_tests.py`: passed with address/undefined sanitizers.
@@ -69,3 +69,7 @@ An incoming direct or channel text message wakes an idle E-ink display even when
 ## 1.1.3: prevent accumulated E-ink ghosting
 
 The M1 now renders a complete frame and performs a real full-waveform display update at startup, after waking and after 20 changed partial updates. Forced full refresh also runs if the frame CRC is unchanged. Rendering no longer clears the physical panel before the frame is complete. Idle still retains the image. Other GxEPD targets retain their existing policy. Hardware verification is pending.
+
+## 1.1.4: white cleaning cycle followed by differential content
+
+After a hardware report of pale text immediately after full updates, the M1 cleanup sequence now resets the EPD controller, performs a full white clear and writes the already-rendered content with a partial update. This keeps the image-building path used before 1.1.3 while retaining periodic/wake cleaning. The exact cause of the physical contrast loss is not established by host simulation; a new hardware contrast check is required.
