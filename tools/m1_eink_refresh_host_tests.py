@@ -16,13 +16,25 @@ fixture=r'''
 using ColorVal=uint16_t;
 namespace UIColor {const ColorVal primary_txt=0;}
 struct Panel {
- struct Controller {int inits=0;void init(int,bool,int,bool){inits++;}} epd2;
+ struct Controller {
+ int inits=0,cleans=0,syncs=0;uint8_t current=0xFF,previous=0xFF,visible=0xFF;
+ void init(int,bool,int,bool){inits++;}
+ void writeScreenBuffer(uint8_t value){current=value;}
+ void refresh(bool part){assert(part);assert(previous==visible);visible=current;cleans++;}
+ void writeScreenBufferAgain(uint8_t value){current=previous=value;syncs++;}
+ } epd2;
+ uint8_t buffer=0xFF;
  int full=0,partial=0,erases=0,poweroffs=0;
- void fillScreen(ColorVal) {} void setTextColor(ColorVal) {}
+ void fillScreen(ColorVal) {buffer=0xFF;} void setTextColor(ColorVal) {}
  void setFullWindow() {} int width(){return 200;} int height(){return 200;}
  void setPartialWindow(int,int,int,int) {}
  void clearScreen(int) {erases++;full++;} void writeScreenBuffer(int) {erases++;}
- void display(bool part) {if(part)partial++;else full++;}
+ void display(bool part) {
+ assert(epd2.visible==0xFF && epd2.previous==0xFF);
+ assert(epd2.cleans==partial+1 && epd2.syncs==partial+1);
+ if(part)partial++;else full++;
+ epd2.current=epd2.previous=epd2.visible=buffer;
+ }
  void powerOff(){poweroffs++;} void hibernate(){poweroffs++;}
 };
 struct CRC {uint32_t value=1;void reset(){} uint32_t finalize(){return value;}};
@@ -43,10 +55,11 @@ public:
 cases=r'''
 int main(){
  GxEPDDisplay d;assert(d.max_partial_refresh==-1);
- d.startFrame(1);assert(d.display.erases==0);d.endFrame();
+ d.startFrame(1);d.display.buffer=0x12;assert(d.display.erases==0);d.endFrame();
+ assert(d.display.epd2.visible==0x12);
  assert(d.display.full==0 && d.display.partial==1);
  d.startFrame(1);d.endFrame();assert(d.display.partial==1);
- for(int i=0;i<30;i++){d.display_crc.value++;d.startFrame(1);d.endFrame();}
+ for(int i=0;i<30;i++){d.display_crc.value++;d.startFrame(1);d.display.buffer=uint8_t(i+1);d.endFrame();assert(d.display.epd2.visible==uint8_t(i+1));}
  assert(d.display.full==0 && d.display.partial==31 && d.display.erases==0);
  d.turnOff();assert(!d._isOn && d.display.erases==0 && d.display.poweroffs==1);
  d.endFrame();assert(d.display.partial==31);
@@ -59,4 +72,4 @@ with tempfile.TemporaryDirectory() as d:
  f.write_text(header[s:e]+fixture+'\n'.join(method(n) for n in ['turnOn','turnOff','startFrame','endFrame'])+cases)
  subprocess.run(['clang++','-std=c++17','-DTHINKNODE_M1=1','-fsanitize=address,undefined',str(f),'-o',str(binary)],check=True)
  subprocess.run([str(binary)],check=True)
-print('PASS: restored 1.1.2 partial refresh, unchanged CRC skips refresh, sleep retains image, wake resumes without full clear')
+print('PASS: partial white erase -> history sync -> buffered frame; 30 changes retain new pixels; unchanged/idle skip erase; no reset/full refresh')

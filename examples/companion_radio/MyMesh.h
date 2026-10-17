@@ -15,15 +15,15 @@
 #endif
 
 #ifndef FIRMWARE_VERSION
-#define FIRMWARE_VERSION "Fieldtest by Moorbock 1.1.5 based on " STOCK_FIRMWARE_VERSION
+#define FIRMWARE_VERSION "Fieldtest by Moorbock 1.1.6 based on " STOCK_FIRMWARE_VERSION
 #endif
 
 #ifndef CLIENT_FIRMWARE_VERSION
-#define CLIENT_FIRMWARE_VERSION "MBK FT1.1.5 v1.18"
+#define CLIENT_FIRMWARE_VERSION "MBK FT1.1.6 v1.18"
 #endif
 
 #ifndef DISPLAY_FIRMWARE_VERSION
-#define DISPLAY_FIRMWARE_VERSION "FT 1.1.5"
+#define DISPLAY_FIRMWARE_VERSION "FT 1.1.6"
 #endif
 
 #if defined(NRF52_PLATFORM) || defined(STM32_PLATFORM)

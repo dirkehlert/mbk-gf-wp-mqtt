@@ -224,6 +224,14 @@ void GxEPDDisplay::endFrame() {
   if (_isOn == false) return;
   uint32_t crc = display_crc.finalize();
   if (crc != last_display_crc_value) {
+#if defined(THINKNODE_M1)
+    // Erase the previous visible frame differentially before drawing the next.
+    // These controller-only writes preserve the completed MCU framebuffer.
+    // Synchronise both controller RAM planes to the white intermediate frame.
+    display.epd2.writeScreenBuffer(0xFF);
+    display.epd2.refresh(true);
+    display.epd2.writeScreenBufferAgain(0xFF);
+#endif
     display.display(true);
     if (_cycles_before_full_refresh > 0) {
       _cycles_before_full_refresh--;
