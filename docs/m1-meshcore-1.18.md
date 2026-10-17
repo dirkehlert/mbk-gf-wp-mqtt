@@ -1,5 +1,7 @@
 # Moorbock M1 Fieldmonitor on MeshCore Companion 1.18.0
 
+Fieldtest version: 1.1; client identifier: `Moorbock FT1.1 1.18` (19 characters).
+
 Port prepared on 2026-10-17. Target: `ThinkNode_M1_companion_radio_ble`.
 
 Upstream: `companion-v1.18.0`, commit `81dbae592ffad40b4212bc0b37e82b38da08f4bc`.

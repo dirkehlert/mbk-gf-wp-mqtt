@@ -7,7 +7,7 @@
 #define FIRMWARE_VER_CODE 14
 
 #ifndef FIRMWARE_BUILD_DATE
-#define FIRMWARE_BUILD_DATE "15 Oct 2026"
+#define FIRMWARE_BUILD_DATE "17 Oct 2026"
 #endif
 
 #ifndef STOCK_FIRMWARE_VERSION
@@ -15,15 +15,15 @@
 #endif
 
 #ifndef FIRMWARE_VERSION
-#define FIRMWARE_VERSION "Fieldtest by Moorbock 1.0 based on " STOCK_FIRMWARE_VERSION
+#define FIRMWARE_VERSION "Fieldtest by Moorbock 1.1 based on " STOCK_FIRMWARE_VERSION
 #endif
 
 #ifndef CLIENT_FIRMWARE_VERSION
-#define CLIENT_FIRMWARE_VERSION "Moorbock FT1 v1.18"
+#define CLIENT_FIRMWARE_VERSION "Moorbock FT1.1 1.18"
 #endif
 
 #ifndef DISPLAY_FIRMWARE_VERSION
-#define DISPLAY_FIRMWARE_VERSION "FT 1.0"
+#define DISPLAY_FIRMWARE_VERSION "FT 1.1"
 #endif
 
 #if defined(NRF52_PLATFORM) || defined(STM32_PLATFORM)
