@@ -38,9 +38,7 @@ bool GxEPDDisplay::begin() {
 #endif
   display.init(115200, true, 2, false);
   display.setRotation(DISPLAY_ROTATION);
-  // Layout and ellipsis are handled by DisplayDriver. Automatic wrapping also
-  // makes getTextBounds report a wrapped width, hiding overlong path strings.
-  display.setTextWrap(false);
+  display.setTextWrap(false);  // measure full lines so ellipsis can truncate paths
   setTextSize(1);  // Default to size 1
 
   display.setFullWindow();
@@ -56,6 +54,9 @@ bool GxEPDDisplay::begin() {
 
   display.setPartialWindow(0, 0, display.width(), display.height());
   resetPartialRefreshCounter();
+#if defined(THINKNODE_M1)
+  forceFullRefresh();  // clear residual images from the previous session
+#endif
 
   #if DISP_BACKLIGHT
   digitalWrite(DISP_BACKLIGHT, LOW);
@@ -74,6 +75,9 @@ void GxEPDDisplay::turnOn() {
   expander.digitalWrite(EXP_PIN_BACKLIGHT, HIGH);
 #endif
   if (!_isOn) {
+#if defined(THINKNODE_M1)
+    forceFullRefresh();  // resynchronise the panel after idle power-off
+#endif
     _isOn = true;
   }
 }
@@ -110,6 +114,10 @@ void GxEPDDisplay::startFrame(ColorVal bkg) {
   display.fillScreen(bkg);
   display.setTextColor(_curr_color = UIColor::primary_txt);
   display_crc.reset();
+#if defined(THINKNODE_M1)
+  // Render the complete new frame before doing any panel refresh.
+  display.setFullWindow();
+#else
   if (_cycles_before_full_refresh != 0) {
     display.setPartialWindow(0, 0, display.width(), display.height());
   } else {
@@ -120,6 +128,7 @@ void GxEPDDisplay::startFrame(ColorVal bkg) {
     last_display_crc_value = 0;
     resetPartialRefreshCounter();
   }
+#endif
 }
 
 void GxEPDDisplay::setTextSize(int sz) {
@@ -223,22 +232,20 @@ uint16_t GxEPDDisplay::getTextWidth(const char* str) {
 void GxEPDDisplay::endFrame() {
   if (_isOn == false) return;
   uint32_t crc = display_crc.finalize();
-  if (crc != last_display_crc_value) {
 #if defined(THINKNODE_M1)
-    // Erase the previous visible frame differentially before drawing the next.
-    // These controller-only writes preserve the completed MCU framebuffer.
-    // Synchronise both controller RAM planes to the white intermediate frame.
-    display.epd2.writeScreenBuffer(0xFF);
-    display.epd2.refresh(true);
-    // Keep the old-image plane for a second black-to-white erase pulse. Bold
-    // glyphs still leave visible residue with a single pulse on this M1 panel.
-    display.epd2.refresh(true);
-    display.epd2.writeScreenBufferAgain(0xFF);
-#endif
+  bool full_refresh = _cycles_before_full_refresh == 0;
+  if (full_refresh || crc != last_display_crc_value) {
+    display.display(!full_refresh);
+    if (full_refresh) resetPartialRefreshCounter();
+    else if (_cycles_before_full_refresh > 0) _cycles_before_full_refresh--;
+  }
+#else
+  if (crc != last_display_crc_value) {
     display.display(true);
     if (_cycles_before_full_refresh > 0) {
       _cycles_before_full_refresh--;
     }
   }
+#endif
   last_display_crc_value = crc;
 }

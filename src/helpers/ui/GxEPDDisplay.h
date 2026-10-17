@@ -19,7 +19,11 @@
 #ifndef EINK_MAX_PARTIAL_REFRESH
   // 60 to prevent ghosting when refreshing every minute ...
   // set to -1 to disable the counter
-  #define EINK_MAX_PARTIAL_REFRESH -1
+  #if defined(THINKNODE_M1)
+    #define EINK_MAX_PARTIAL_REFRESH 10
+  #else
+    #define EINK_MAX_PARTIAL_REFRESH -1
+  #endif
 #endif
 
 class GxEPDDisplay : public DisplayDriver {
@@ -31,7 +35,12 @@ class GxEPDDisplay : public DisplayDriver {
   const float offset_x = EINK_X_OFFSET;
   const float offset_y = EINK_Y_OFFSET;
 #else
+#if defined(THINKNODE_M1)
+  // ThinkNode M1 uses GDEH0154D67/SSD1681; do not load the 150_BN LUT.
+  GxEPD2_BW<GxEPD2_154_D67, GxEPD2_154_D67::HEIGHT> display;
+#else
   GxEPD2_BW<GxEPD2_150_BN, 200> display;
+#endif
   const float scale_x  = 1.5625f;
   const float scale_y  = 1.5625f;
   const float offset_x = 0;
@@ -48,6 +57,8 @@ class GxEPDDisplay : public DisplayDriver {
 public:
 #if defined(EINK_DISPLAY_MODEL)
   GxEPDDisplay() : DisplayDriver(128, 128), display(EINK_DISPLAY_MODEL(PIN_DISPLAY_CS, PIN_DISPLAY_DC, PIN_DISPLAY_RST, PIN_DISPLAY_BUSY)) {}
+#elif defined(THINKNODE_M1)
+  GxEPDDisplay() : DisplayDriver(128, 128), display(GxEPD2_154_D67(DISP_CS, DISP_DC, DISP_RST, DISP_BUSY)) {}
 #else
   GxEPDDisplay() : DisplayDriver(128, 128), display(GxEPD2_150_BN(DISP_CS, DISP_DC, DISP_RST, DISP_BUSY)) {}
 #endif

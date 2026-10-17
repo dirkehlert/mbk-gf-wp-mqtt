@@ -1,6 +1,6 @@
 # Moorbock M1 Fieldmonitor on MeshCore Companion 1.18.0
 
-Fieldtest version: 1.1.7; client identifier: `MBK FT1.1.7 v1.18` (17 characters).
+Fieldtest version: 1.1.8; client identifier: `MBK FT1.1.8 v1.18` (17 characters).
 
 Port prepared on 2026-10-17. Target: `ThinkNode_M1_companion_radio_ble`.
 
@@ -82,3 +82,8 @@ Hardware tests rejected the 1.1.3/1.1.4 full refresh changes (pale/blank display
 
 ## 1.1.7: repeat erase pulse before history synchronisation
 Hardware feedback for 1.1.6: path improved, but old and new MSG digits still overlap. Test a second differential white erase while keeping the previous-image plane unchanged, then synchronise white and draw new content. This reinforces the same erase transition instead of a white-to-white update. No added full refresh or reset; one additional partial cycle per changed frame increases display update latency. Physical contrast/erase efficacy remains unverified until user feedback.
+
+## 1.1.8: correct M1 panel driver
+1.1.7 hardware photo still contains the entire boot splash behind the home screen. Repeated partial erases failed. Meshtastic's ThinkNode M1 configuration explicitly selects GxEPD2_154_D67, whereas MeshCore's generic fallback selects GxEPD2_150_BN. The latter uploads a custom partial LUT; the D67 driver uses the panel OTP waveforms. Select D67 only for M1; other boards retain existing selection. Remove the speculative white erase passes and controller reset. Render completed frames, full refresh at boot/wake and after ten changed partial updates, retain the last physical image at idle. One-line ellipsis remains enabled. Full refresh will briefly flash; visual outcome requires hardware verification.
+
+Evidence: https://github.com/meshtastic/firmware/blob/master/variants/nrf52840/ELECROW-ThinkNode-M1/platformio.ini (model and ten-fast-refresh limit). Existing GxEPD2 1.6.2 D67 implementation used; no wholesale Meshtastic fork migration. Source comparison with Meshtastic fork at c7eb4c3c shows different APIs and history handling, so it was not substituted blindly.
