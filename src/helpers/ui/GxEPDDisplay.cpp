@@ -82,6 +82,11 @@ void GxEPDDisplay::turnOff() {
   expander.digitalWrite(EXP_PIN_BACKLIGHT, LOW);
 #endif
   _isOn = false;
+#if defined(THINKNODE_M1)
+  // E-ink retains its last image without power. Keep the controller RAM and
+  // refresh history intact so the next update can resume after power-on.
+  display.powerOff();
+#else
   // do full refresh before powering off to clear screen
   // no full refresh needed at wakeup
   display.clearScreen(0xFF); // Clears microcontroller side RAM
@@ -89,6 +94,7 @@ void GxEPDDisplay::turnOff() {
   resetPartialRefreshCounter();
   last_display_crc_value=0;
   display.hibernate();
+#endif
 }
 
 void GxEPDDisplay::clear() {

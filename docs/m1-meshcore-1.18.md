@@ -1,6 +1,6 @@
 # Moorbock M1 Fieldmonitor on MeshCore Companion 1.18.0
 
-Fieldtest version: 1.1; client identifier: `Moorbock FT1.1 1.18` (19 characters).
+Fieldtest version: 1.1.1; client identifier: `MBK FT1.1.1 v1.18` (17 characters).
 
 Port prepared on 2026-10-17. Target: `ThinkNode_M1_companion_radio_ble`.
 
@@ -30,7 +30,7 @@ falls back to the default scope. Temporary send scope state is restored after us
 
 - M1 PlatformIO build: SUCCESS; ARM GCC 14.2.1.
 - RAM: 160136 / 235520 bytes (68.0%).
-- Flash: 413604 / 712704 bytes (58.0%).
+- Flash: 413572 / 712704 bytes (58.0%).
 - 46 upstream native tests passed: serialization, mesh tables, routing, UTF-8, hex.
 - `python3 tools/m1_listener_host_tests.py`: passed with address/undefined sanitizers.
 - `python3 tools/m1_keepalive_host_tests.py`: passed with address/undefined sanitizers.
@@ -57,3 +57,7 @@ The fallback archive includes original DFU images and a complete source bundle.
 The final fallback UF2 was generated from the final 1.17 keepalive-scope-fix DFU
 image at application base 0x26000 and its payload was compared byte-for-byte.
 It is an application firmware fallback, not a device settings/identity readback.
+
+## 1.1.1: preserve the M1 screen during idle
+
+For THINKNODE_M1 only, turnOff powers down the EPD without clearing its image or deep-sleeping the controller. Controller RAM and CRC history are retained for subsequent partial updates. Other targets retain upstream sleep behavior. This fixes the blank screen introduced by upstream 1.18 clearing the panel on idle.
