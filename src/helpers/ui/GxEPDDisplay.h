@@ -19,11 +19,7 @@
 #ifndef EINK_MAX_PARTIAL_REFRESH
   // 60 to prevent ghosting when refreshing every minute ...
   // set to -1 to disable the counter
-  #if defined(THINKNODE_M1)
-    #define EINK_MAX_PARTIAL_REFRESH 20
-  #else
-    #define EINK_MAX_PARTIAL_REFRESH -1
-  #endif
+  #define EINK_MAX_PARTIAL_REFRESH -1
 #endif
 
 class GxEPDDisplay : public DisplayDriver {

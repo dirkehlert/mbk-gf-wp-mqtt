@@ -1,6 +1,6 @@
 # Moorbock M1 Fieldmonitor on MeshCore Companion 1.18.0
 
-Fieldtest version: 1.1.4; client identifier: `MBK FT1.1.4 v1.18` (17 characters).
+Fieldtest version: 1.1.5; client identifier: `MBK FT1.1.5 v1.18` (17 characters).
 
 Port prepared on 2026-10-17. Target: `ThinkNode_M1_companion_radio_ble`.
 
@@ -73,3 +73,6 @@ The M1 now renders a complete frame and performs a real full-waveform display up
 ## 1.1.4: white cleaning cycle followed by differential content
 
 After a hardware report of pale text immediately after full updates, the M1 cleanup sequence now resets the EPD controller, performs a full white clear and writes the already-rendered content with a partial update. This keeps the image-building path used before 1.1.3 while retaining periodic/wake cleaning. The exact cause of the physical contrast loss is not established by host simulation; a new hardware contrast check is required.
+
+## 1.1.5: prevent path text wrapping
+Hardware tests rejected the 1.1.3/1.1.4 full refresh changes (pale/blank display). This version restores the 1.1.2 display refresh and sleep implementation. GFX automatic text wrapping is disabled so width measurement sees the full single-line path and DisplayDriver can truncate it with ellipsis. Existing partial-refresh ghosting may remain; this change addresses line wrapping, not panel waveforms.

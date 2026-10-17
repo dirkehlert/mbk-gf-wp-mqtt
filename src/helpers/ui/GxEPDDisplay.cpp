@@ -38,6 +38,9 @@ bool GxEPDDisplay::begin() {
 #endif
   display.init(115200, true, 2, false);
   display.setRotation(DISPLAY_ROTATION);
+  // Layout and ellipsis are handled by DisplayDriver. Automatic wrapping also
+  // makes getTextBounds report a wrapped width, hiding overlong path strings.
+  display.setTextWrap(false);
   setTextSize(1);  // Default to size 1
 
   display.setFullWindow();
@@ -53,9 +56,6 @@ bool GxEPDDisplay::begin() {
 
   display.setPartialWindow(0, 0, display.width(), display.height());
   resetPartialRefreshCounter();
-#if defined(THINKNODE_M1)
-  forceFullRefresh();  // clear residual images from the previous session
-#endif
 
   #if DISP_BACKLIGHT
   digitalWrite(DISP_BACKLIGHT, LOW);
@@ -74,9 +74,6 @@ void GxEPDDisplay::turnOn() {
   expander.digitalWrite(EXP_PIN_BACKLIGHT, HIGH);
 #endif
   if (!_isOn) {
-#if defined(THINKNODE_M1)
-    forceFullRefresh();  // resynchronise the panel after idle power-off
-#endif
     _isOn = true;
   }
 }
@@ -113,10 +110,6 @@ void GxEPDDisplay::startFrame(ColorVal bkg) {
   display.fillScreen(bkg);
   display.setTextColor(_curr_color = UIColor::primary_txt);
   display_crc.reset();
-#if defined(THINKNODE_M1)
-  // Render the complete new frame before doing any panel refresh.
-  display.setFullWindow();
-#else
   if (_cycles_before_full_refresh != 0) {
     display.setPartialWindow(0, 0, display.width(), display.height());
   } else {
@@ -127,7 +120,6 @@ void GxEPDDisplay::startFrame(ColorVal bkg) {
     last_display_crc_value = 0;
     resetPartialRefreshCounter();
   }
-#endif
 }
 
 void GxEPDDisplay::setTextSize(int sz) {
@@ -231,28 +223,11 @@ uint16_t GxEPDDisplay::getTextWidth(const char* str) {
 void GxEPDDisplay::endFrame() {
   if (_isOn == false) return;
   uint32_t crc = display_crc.finalize();
-#if defined(THINKNODE_M1)
-  bool full_refresh = _cycles_before_full_refresh == 0;
-  if (full_refresh || crc != last_display_crc_value) {
-    if (full_refresh) {
-      // The M1 panel can render a grey frame when switching directly from the
-      // differential LUT to a full image. Reset its controller, clean to white
-      // with a full waveform, then draw the buffered content differentially.
-      display.epd2.init(0, false, 2, false);
-      display.clearScreen(0xFF);
-      display.writeScreenBuffer(0xFF);
-    }
-    display.display(true);
-    if (full_refresh) resetPartialRefreshCounter();
-    else if (_cycles_before_full_refresh > 0) _cycles_before_full_refresh--;
-  }
-#else
   if (crc != last_display_crc_value) {
     display.display(true);
     if (_cycles_before_full_refresh > 0) {
       _cycles_before_full_refresh--;
     }
   }
-#endif
   last_display_crc_value = crc;
 }

@@ -42,21 +42,16 @@ public:
 '''
 cases=r'''
 int main(){
- GxEPDDisplay d;assert(d.max_partial_refresh==20);
- d.forceFullRefresh();d.startFrame(1);assert(d.display.erases==0);d.endFrame();
- assert(d.display.full==1 && d.display.partial==1 && d.display.epd2.inits==1);
- assert(d._cycles_before_full_refresh==20);
- d.startFrame(1);d.endFrame();assert(d.display.full==1 && d.display.partial==1);
- for(int i=0;i<20;i++){d.display_crc.value++;d.startFrame(1);d.endFrame();}
- assert(d.display.partial==21 && d._cycles_before_full_refresh==0);
- d.startFrame(1);d.endFrame();assert(d.display.full==2 && d.display.partial==22);
- assert(d._cycles_before_full_refresh==20 && d.display.epd2.inits==2);
- int erases=d.display.erases;
- d.turnOff();assert(!d._isOn && d.display.erases==erases && d.display.poweroffs==1);
- d.endFrame();assert(d.display.full==2);
- d.turnOn();assert(d._isOn && d._cycles_before_full_refresh==0);
- d.startFrame(1);assert(d.display.erases==erases);d.endFrame();
- assert(d.display.full==3 && d.display.partial==23 && d.display.epd2.inits==3);
+ GxEPDDisplay d;assert(d.max_partial_refresh==-1);
+ d.startFrame(1);assert(d.display.erases==0);d.endFrame();
+ assert(d.display.full==0 && d.display.partial==1);
+ d.startFrame(1);d.endFrame();assert(d.display.partial==1);
+ for(int i=0;i<30;i++){d.display_crc.value++;d.startFrame(1);d.endFrame();}
+ assert(d.display.full==0 && d.display.partial==31 && d.display.erases==0);
+ d.turnOff();assert(!d._isOn && d.display.erases==0 && d.display.poweroffs==1);
+ d.endFrame();assert(d.display.partial==31);
+ d.turnOn();d.display_crc.value++;d.startFrame(1);d.endFrame();
+ assert(d._isOn && d.display.partial==32 && d.display.full==0);
 }
 '''
 with tempfile.TemporaryDirectory() as d:
@@ -64,4 +59,4 @@ with tempfile.TemporaryDirectory() as d:
  f.write_text(header[s:e]+fixture+'\n'.join(method(n) for n in ['turnOn','turnOff','startFrame','endFrame'])+cases)
  subprocess.run(['clang++','-std=c++17','-DTHINKNODE_M1=1','-fsanitize=address,undefined',str(f),'-o',str(binary)],check=True)
  subprocess.run([str(binary)],check=True)
-print('PASS: M1 full/partial budget, unchanged CRC, sleep retention, forced wake refresh and no premature physical clear')
+print('PASS: restored 1.1.2 partial refresh, unchanged CRC skips refresh, sleep retains image, wake resumes without full clear')
