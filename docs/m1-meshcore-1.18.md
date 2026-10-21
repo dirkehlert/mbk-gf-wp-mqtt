@@ -1,6 +1,6 @@
 # Moorbock M1 Fieldmonitor on MeshCore Companion 1.18.0
 
-Fieldtest version: 1.1.13; client identifier: `MBK FT1.1.13 v1.18` (18 characters).
+Fieldtest version: 1.1.12; client identifier: `MBK FT1.1.12 v1.18` (18 characters).
 
 Port prepared on 2026-10-17. Target: `ThinkNode_M1_companion_radio_ble`.
 
@@ -101,8 +101,3 @@ Hardwarebestätigung am 17.10.2026: Nutzer bestätigt 1.1.11 nach Empfang und Ru
 
 ## 1.1.12: scoped message line wrapping
 Override GxEPDDisplay::printWordWrap so the full-width message and reply body calls enable native GFX line wrapping only while printing that body. Restore wrap=false immediately afterwards so status/path ellipsis still measures single lines. Existing explicit newlines are respected; native GFX wraps long words at a glyph boundary. No changes to the accepted 1.1.11 display refresh, startup or idle behavior. max_width contributes to frame CRC; current UI call sites both pass full display width (narrow text columns are not introduced).
-
-## 1.1.13: KEEPALIVEC room copy (21 October 2026)
-Exact incoming direct text KEEPALIVEC retains its existing response to MBKCHN1 and additionally sends the same formatted payload to the unique saved room contact named GF MBK Room (type ADV_TYPE_ROOM). Copy is independent of channel-send success. Missing/ambiguous room or local send failure is logged over USB, without suppressing the channel response. Existing KEEPALIVE behavior, disabled-keepalive switch, UI, refresh and wrapping remain unchanged. Uses the room's stored direct path, or configured default scope for a flood, never an unrelated UI send scope. Sender scope flags restored after sending. Room ACK enters ordinary ACK table without overwriting dedicated KEEPALIVE ACK state.
-
-Prerequisite: save the exact Room contact on M1, and log in once as a user with posting permission (or pre-authorise its identity in the room ACL). Bluetooth is not needed for subsequent autonomous copies. No password stored or auto-login added. Queued logs do not prove delivery/post acceptance. Acceptance test: send KEEPALIVEC to M1, verify one matching report in MBKCHN1 and GF MBK Room; with room absent, MBKCHN1 still works. Plain KEEPALIVE never creates a room post.

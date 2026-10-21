@@ -7,7 +7,7 @@
 #define FIRMWARE_VER_CODE 14
 
 #ifndef FIRMWARE_BUILD_DATE
-#define FIRMWARE_BUILD_DATE "21 Oct 2026"
+#define FIRMWARE_BUILD_DATE "17 Oct 2026"
 #endif
 
 #ifndef STOCK_FIRMWARE_VERSION
@@ -15,15 +15,15 @@
 #endif
 
 #ifndef FIRMWARE_VERSION
-#define FIRMWARE_VERSION "Fieldtest by Moorbock 1.1.13 based on " STOCK_FIRMWARE_VERSION
+#define FIRMWARE_VERSION "Fieldtest by Moorbock 1.1.12 based on " STOCK_FIRMWARE_VERSION
 #endif
 
 #ifndef CLIENT_FIRMWARE_VERSION
-#define CLIENT_FIRMWARE_VERSION "MBK FT1.1.13 v1.18"
+#define CLIENT_FIRMWARE_VERSION "MBK FT1.1.12 v1.18"
 #endif
 
 #ifndef DISPLAY_FIRMWARE_VERSION
-#define DISPLAY_FIRMWARE_VERSION "FT 1.1.13"
+#define DISPLAY_FIRMWARE_VERSION "FT 1.1.12"
 #endif
 
 #if defined(NRF52_PLATFORM) || defined(STM32_PLATFORM)
@@ -329,8 +329,7 @@ protected:
   bool resolvePacketScopeKey(const mesh::Packet *packet, TransportKey& key) const;
   bool sendKeepaliveReply(const ContactInfo &recipient, const mesh::Packet *request, const char *label);
   bool sendKeepaliveChannel(const char *channel_name, const mesh::Packet *request,
-                            const char *label, const char *reply_text = NULL);
-  bool sendKeepaliveRoomCopy(const char *room_name, const char *reply_text);
+                            const char *label);
 
   void onMessageRecv(const ContactInfo &from, mesh::Packet *pkt, uint32_t sender_timestamp,
                      const char *text) override;

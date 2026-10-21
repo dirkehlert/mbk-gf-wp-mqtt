@@ -2082,15 +2082,14 @@ bool MyMesh::sendKeepaliveReply(const ContactInfo &recipient, const mesh::Packet
 }
 
 bool MyMesh::sendKeepaliveChannel(const char *channel_name, const mesh::Packet *request,
-                                  const char *label, const char *reply_text) {
+                                  const char *label) {
 #ifdef MAX_GROUP_CHANNELS
   if (!channel_name || !channel_name[0]) return false;
   for (uint8_t i = 0; i < MAX_GROUP_CHANNELS; i++) {
     ChannelDetails channel;
     if (!getChannel(i, channel) || strcmp(channel.name, channel_name) != 0) continue;
     char reply[MAX_TEXT_LEN + 1];
-    if (reply_text) StrHelper::strncpy(reply, reply_text, sizeof(reply));
-    else formatKeepaliveReply(label, reply, sizeof(reply));
+    formatKeepaliveReply(label, reply, sizeof(reply));
     TransportKey previous_scope = send_scope;
     bool previous_unscoped = send_unscoped;
     TransportKey incoming_scope;
@@ -2112,61 +2111,9 @@ bool MyMesh::sendKeepaliveChannel(const char *channel_name, const mesh::Packet *
   }
 #else
   (void)channel_name;
-  (void)request;
   (void)label;
-  (void)reply_text;
 #endif
   return false;
-}
-
-bool MyMesh::sendKeepaliveRoomCopy(const char *room_name, const char *reply_text) {
-  if (!room_name || !room_name[0] || !reply_text || !reply_text[0]) return false;
-
-  ContactInfo room;
-  bool found = false;
-  for (uint32_t i = 0; i < getNumContacts(); i++) {
-    ContactInfo candidate;
-    if (!getContactByIdx(i, candidate) || candidate.type != ADV_TYPE_ROOM ||
-        strcmp(candidate.name, room_name) != 0) continue;
-    // Never choose an arbitrary recipient if two rooms advertise this name.
-    if (found) {
-      Serial.printf("KEEPALIVEC room copy: ambiguous room %s\n", room_name);
-      return false;
-    }
-    room = candidate;
-    found = true;
-  }
-  if (!found) {
-    Serial.printf("KEEPALIVEC room copy: missing room contact %s\n", room_name);
-    return false;
-  }
-
-  // Keep the room's own route. If it is unknown, flood inside our configured
-  // default scope, independently of the requesting node's path and UI scope.
-  TransportKey previous_scope = send_scope;
-  bool previous_unscoped = send_unscoped;
-  memcpy(send_scope.key, _prefs.default_scope_key, sizeof(send_scope.key));
-  send_unscoped = false;
-  uint32_t expected_ack = 0;
-  uint32_t est_timeout = 0;
-  int result = sendMessage(room, getRTCClock()->getCurrentTimeUnique(), 0,
-                           reply_text, expected_ack, est_timeout);
-  send_scope = previous_scope;
-  send_unscoped = previous_unscoped;
-  if (result == MSG_SEND_FAILED) {
-    Serial.printf("KEEPALIVEC room copy: send failed for %s\n", room_name);
-    return false;
-  }
-  if (expected_ack) {
-    expected_ack_table[next_ack_idx].msg_sent = _ms->getMillis();
-    expected_ack_table[next_ack_idx].ack = expected_ack;
-    expected_ack_table[next_ack_idx].contact = lookupContactByPubKey(room.id.pub_key, PUB_KEY_SIZE);
-    next_ack_idx = (next_ack_idx + 1) % EXPECTED_ACK_TABLE_SIZE;
-  }
-  // Queued does not mean accepted: the room must know this M1 and permit posts.
-  // Keep ordinary KEEPALIVE's dedicated ACK status untouched by this copy.
-  Serial.printf("KEEPALIVEC room copy: queued for %s\n", room_name);
-  return true;
 }
 
 void MyMesh::onMessageRecv(const ContactInfo &from, mesh::Packet *pkt, uint32_t sender_timestamp,
@@ -2187,11 +2134,7 @@ void MyMesh::onMessageRecv(const ContactInfo &from, mesh::Packet *pkt, uint32_t 
     StrHelper::strncpy(keepalive_last_scope, monitor_latest_scope, sizeof(keepalive_last_scope));
     StrHelper::strncpy(keepalive_last_repeater, monitor_latest_repeater, sizeof(keepalive_last_repeater));
     if (!keepalive_enabled) return;
-    char reply[MAX_TEXT_LEN + 1];
-    formatKeepaliveReply("KEEPALIVEC", reply, sizeof(reply));
-    bool channel_sent = sendKeepaliveChannel("MBKCHN1", pkt, "KEEPALIVEC", reply);
-    sendKeepaliveRoomCopy("GF MBK Room", reply);
-    if (!channel_sent) {
+    if (!sendKeepaliveChannel("MBKCHN1", pkt, "KEEPALIVEC")) {
       uint32_t expected_ack = 0;
       uint32_t est_timeout = 0;
       sendMessage(from, getRTCClock()->getCurrentTimeUnique(), 0,
